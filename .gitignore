@@ -1,0 +1,29 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.aps
+x64/
+
+# 빌드 결과
+Binary/
+Libraries/Libs/ServerCore/
+
+# Protobuf 라이브러리 (Debug lib 약 88MB -> 저장소에 넣지 않고 따로 복사)
+Libraries/Libs/Protobuf/
+
+# 패킷 생성 결과 (빌드할 때마다 Common/protoc-21.12-win64/bin/GenPackets.bat이 만듦)
+GameServer/*.pb.h
+GameServer/*.pb.cc
+GameServer/ClientPacketHandler.h
+DummyClient/*.pb.h
+DummyClient/*.pb.cc
+DummyClient/ServerPacketHandler.h
+
+# 로컬 설정 (DB 비밀번호 포함) -> config.example.ini를 복사해서 사용
+GameServer/config.ini
+
+# Python (Tools/PacketGenerator)
+__pycache__/
+Tools/PacketGenerator/build/
+Tools/PacketGenerator/dist/

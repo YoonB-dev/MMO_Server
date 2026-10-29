@@ -1,0 +1,19 @@
+syntax = "proto3";
+package Protocol;
+
+// 패킷 이름 규칙: C_ = 클라이언트 -> 서버, S_ = 서버 -> 클라이언트
+// GenPackets는 줄 맨 앞이 'message'인 줄을 위에서부터 읽어 1000번부터 패킷 ID를 붙인다
+//   -> 새 패킷은 맨 아래에 추가 (중간에 넣으면 뒤 패킷 ID가 전부 밀림)
+// 이 파일은 CP949로 저장 (GenPackets가 시스템 기본 인코딩으로 읽음)
+
+// ==================== 연결 확인 ====================
+// 왕복 지연 측정: 서버는 받은 시각을 그대로 돌려줌
+message C_PING
+{
+	int64 client_time_us = 1;
+}
+
+message S_PING
+{
+	int64 client_time_us = 1;
+}

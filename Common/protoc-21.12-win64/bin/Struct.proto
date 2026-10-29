@@ -1,0 +1,4 @@
+syntax = "proto3";
+package Protocol;
+
+// 패킷에서 공통으로 쓰는 구조체 (Protocol.proto에서 import "Struct.proto";로 사용)
