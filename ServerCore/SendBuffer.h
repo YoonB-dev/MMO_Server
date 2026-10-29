@@ -61,6 +61,8 @@ class SendBufferManager
 {
 	
 public:
+	~SendBufferManager();
+
 	SendBufferRef				Open(uint32 size);
 
 private:
@@ -72,4 +74,6 @@ private:
 private:
 	USE_LOCK;
 	xvector<SendBufferChunkRef>	_sendBufferChunks;
+
+	static Atomic<bool>			s_shuttingDown;
 };

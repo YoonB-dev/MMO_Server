@@ -70,6 +70,17 @@ void SendBufferChunk::Close(uint32 writeSize)
 	SendBufferManager
 -------------------*/
 
+Atomic<bool> SendBufferManager::s_shuttingDown = false;
+
+SendBufferManager::~SendBufferManager()
+{
+	// 플래그를 먼저 세워서, 아래 clear()로 불리는 PushGlobal이 청크를 벡터에 다시 넣지 않고 바로 해제하게 함
+	s_shuttingDown = true;
+
+	// static 소멸 단계라 락을 잡지 않음 (워커 스레드는 이미 Join됨, TLS도 이미 사라짐)
+	_sendBufferChunks.clear();
+}
+
 // [                 ] 이렇게 크게 할당된 버퍼를 나눈다.
 // TLS에 버퍼 할당.
 SendBufferRef SendBufferManager::Open(uint32 size)
@@ -117,6 +128,12 @@ void SendBufferManager::Push(SendBufferChunkRef buffer)
 
 void SendBufferManager::PushGlobal(SendBufferChunk* buffer)
 {
+	if (s_shuttingDown)
+	{
+		xdelete(buffer);
+		return;
+	}
+
 	GSendBufferManager->Push(SendBufferChunkRef(buffer, PushGlobal));
 }
 

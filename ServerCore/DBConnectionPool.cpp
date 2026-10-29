@@ -7,7 +7,8 @@ DBConnectionPool::DBConnectionPool()
 
 DBConnectionPool::~DBConnectionPool()
 {
-	Clear();
+	// 소멸자는 프로그램 종료(static 소멸) 때 불림 -> 락을 잡지 않는 정리 함수 사용
+	ReleaseAll();
 }
 
 bool DBConnectionPool::Connect(int32 maxConnections, const WCHAR* connString)
@@ -55,6 +56,11 @@ bool DBConnectionPool::Connect(int32 maxConnections, const WCHAR* connString)
 void DBConnectionPool::Clear()
 {
 	WRITE_LOCK;
+	ReleaseAll();
+}
+
+void DBConnectionPool::ReleaseAll()
+{
 
 	if (_env != SQL_NULL_HANDLE)
 	{

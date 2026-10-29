@@ -14,6 +14,9 @@ public:
 	void			Push(DBConnection* connection);
 	void			HandleKeepAlive();
 private:
+	// 락 없이 자원만 정리 (static 소멸 단계에서는 TLS가 이미 사라져서 락을 잡으면 안 됨)
+	void			ReleaseAll();
+private:
 	USE_LOCK;
 	SQLHENV					_env = SQL_NULL_HANDLE;
 	xvector<DBConnection*>	_connections;
