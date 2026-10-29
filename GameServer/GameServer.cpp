@@ -3,6 +3,7 @@
 #include "Service.h"
 #include "GameSession.h"
 #include "ClientPacketHandler.h"
+#include "DBConnectionPool.h"
 
 std::atomic<int64> g_inboundPacketCount(0);
 std::atomic<int64> g_outboundPacketCount(0);
@@ -11,7 +12,58 @@ enum
 {
 	WORKER_TICK = 64,
 	MAX_SESSION_COUNT = 1000,
+	DB_CONNECTION_COUNT = 4,
 };
+
+// DB를 쓸 때 true로 변경 (config.ini의 [Database] 정보로 연결)
+constexpr bool USE_DATABASE = true;
+
+// 실행 파일과 같은 폴더의 config.ini 로드
+bool LoadServerConfig()
+{
+	WCHAR exePath[MAX_PATH];
+	::GetModuleFileNameW(NULL, exePath, MAX_PATH);
+	std::wstring exeDir = exePath;
+	exeDir = exeDir.substr(0, exeDir.find_last_of(L"\\/") + 1);
+
+	if (GConfigManager->LoadConfig(exeDir + L"config.ini") == false)
+	{
+		wcout << L"Failed to load config.ini (copy GameServer/config.example.ini to GameServer/config.ini)" << endl;
+		return false;
+	}
+	return true;
+}
+
+bool ConnectDatabase()
+{
+	if (GDBConnectionPool->Connect(DB_CONNECTION_COUNT, GConfigManager->GetDBConnectionString().c_str()) == false)
+	{
+		wcout << L"Failed to connect database (check [Database] in config.ini)" << endl;
+		return false;
+	}
+
+	wcout << L"Database connected (" << DB_CONNECTION_COUNT << L" connections)" << endl;
+	return true;
+}
+
+ServerServiceRef StartServerService()
+{
+	ServerServiceRef service = MakeShared<ServerService>(
+		NetAddress(GConfigManager->GetServerIP(), GConfigManager->GetServerPort()),
+		MakeShared<IocpCore>(),
+		MakeShared<GameSession>,
+		MAX_SESSION_COUNT
+	);
+
+	if (service->Start() == false)
+	{
+		wcout << L"Failed to start server on " << GConfigManager->GetServerIP() << L":" << GConfigManager->GetServerPort() << endl;
+		return nullptr;
+	}
+
+	wcout << L"Game Server listening on " << GConfigManager->GetServerIP() << L":" << GConfigManager->GetServerPort() << endl;
+	return service;
+}
 
 void DoWorkerJob(ServerServiceRef& service)
 {
@@ -32,31 +84,17 @@ int main()
 {
 	::SetConsoleOutputCP(CP_UTF8);
 
-	// 실행 파일과 같은 폴더의 config.ini 로드
-	WCHAR exePath[MAX_PATH];
-	::GetModuleFileNameW(NULL, exePath, MAX_PATH);
-	std::wstring exeDir = exePath;
-	exeDir = exeDir.substr(0, exeDir.find_last_of(L"\\/") + 1);
-
-	if (GConfigManager->LoadConfig(exeDir + L"config.ini") == false)
-	{
-		wcout << L"Failed to load config.ini (copy GameServer/config.example.ini to GameServer/config.ini)" << endl;
+	if (LoadServerConfig() == false)
 		return -1;
-	}
 
-	// DB를 쓸 때: ASSERT_CRASH(GDBConnectionPool->Connect(4, GConfigManager->GetDBConnectionString().c_str()));
+	if (USE_DATABASE && ConnectDatabase() == false)
+		return -1;
 
 	ClientPacketHandler::Init();
 
-	ServerServiceRef service = MakeShared<ServerService>(
-		NetAddress(GConfigManager->GetServerIP(), GConfigManager->GetServerPort()),
-		MakeShared<IocpCore>(),
-		MakeShared<GameSession>,
-		MAX_SESSION_COUNT
-	);
-
-	ASSERT_CRASH(service->Start());
-	wcout << L"Game Server listening on " << GConfigManager->GetServerIP() << L":" << GConfigManager->GetServerPort() << endl;
+	ServerServiceRef service = StartServerService();
+	if (service == nullptr)
+		return -1;
 
 	int32 workerThreads = GConfigManager->GetWorkerThreadCount();
 	for (int32 i = 0; i < workerThreads; i++)
