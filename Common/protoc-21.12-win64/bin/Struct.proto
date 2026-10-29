@@ -1,4 +1,23 @@
 syntax = "proto3";
 package Protocol;
 
+import "Enum.proto";
+
 // 패킷에서 공통으로 쓰는 구조체 (Protocol.proto에서 import "Struct.proto";로 사용)
+
+// Unity 좌표계 기준 (y가 위쪽), yaw = y축 회전(도)
+message PosInfo
+{
+	float x = 1;
+	float y = 2;
+	float z = 3;
+	float yaw = 4;
+}
+
+// 월드에 존재하는 객체 하나 (플레이어, 몬스터 공통)
+message ObjectInfo
+{
+	uint64 object_id = 1;
+	ObjectType object_type = 2;
+	PosInfo pos_info = 3;
+}

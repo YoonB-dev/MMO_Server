@@ -4,6 +4,7 @@
 #include "GameSession.h"
 #include "ClientPacketHandler.h"
 #include "DBConnectionPool.h"
+#include "Room.h"
 
 std::atomic<int64> g_inboundPacketCount(0);
 std::atomic<int64> g_outboundPacketCount(0);
@@ -16,7 +17,7 @@ enum
 };
 
 // DB를 쓸 때 true로 변경 (config.ini의 [Database] 정보로 연결)
-constexpr bool USE_DATABASE = true;
+constexpr bool USE_DATABASE = false;
 
 // 실행 파일과 같은 폴더의 config.ini 로드
 bool LoadServerConfig()
@@ -91,6 +92,7 @@ int main()
 		return -1;
 
 	ClientPacketHandler::Init();
+	GRoom = MakeShared<Room>();
 
 	ServerServiceRef service = StartServerService();
 	if (service == nullptr)

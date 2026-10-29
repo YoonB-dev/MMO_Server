@@ -10,6 +10,10 @@ int64 NowUs()
 void ServerSession::OnConnected()
 {
 	cout << "[Client] Connected to server" << endl;
+
+	// 접속하자마자 게임 입장 요청
+	Protocol::C_ENTER_GAME enterPkt;
+	Send(ServerPacketHandler::MakeSendBuffer(enterPkt));
 }
 
 void ServerSession::OnDisconnected()

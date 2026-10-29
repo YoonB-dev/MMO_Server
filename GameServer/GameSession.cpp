@@ -2,6 +2,8 @@
 #include "GameSession.h"
 #include "GameSessionManager.h"
 #include "ClientPacketHandler.h"
+#include "Player.h"
+#include "Room.h"
 
 void GameSession::OnConnected()
 {
@@ -11,6 +13,13 @@ void GameSession::OnConnected()
 void GameSession::OnDisconnected()
 {
 	GSessionManager.Remove(static_pointer_cast<GameSession>(shared_from_this()));
+
+	// 입장한 상태였으면 방에서 내보냄 (실제 제거는 Room의 JobQueue에서)
+	if (_player != nullptr)
+	{
+		GRoom->DoAsync(&Room::Leave, _player->GetObjectId());
+		_player = nullptr;
+	}
 }
 
 void GameSession::OnRecvPacket(BYTE* buffer, int32 len)

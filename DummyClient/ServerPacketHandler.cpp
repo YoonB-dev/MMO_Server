@@ -19,3 +19,27 @@ bool Handle_S_PING(PacketSessionRef& session, Protocol::S_PING& pkt)
 	cout << "[Client] S_PING RTT " << rttMs << "ms" << endl;
 	return true;
 }
+
+bool Handle_S_ENTER_GAME(PacketSessionRef& session, Protocol::S_ENTER_GAME& pkt)
+{
+	cout << "[Client] S_ENTER_GAME success=" << pkt.success() << " myId=" << pkt.player().object_id() << endl;
+	return true;
+}
+
+bool Handle_S_SPAWN(PacketSessionRef& session, Protocol::S_SPAWN& pkt)
+{
+	cout << "[Client] S_SPAWN ids:";
+	for (const Protocol::ObjectInfo& object : pkt.objects())
+		cout << " " << object.object_id();
+	cout << endl;
+	return true;
+}
+
+bool Handle_S_DESPAWN(PacketSessionRef& session, Protocol::S_DESPAWN& pkt)
+{
+	cout << "[Client] S_DESPAWN ids:";
+	for (uint64 objectId : pkt.object_ids())
+		cout << " " << objectId;
+	cout << endl;
+	return true;
+}

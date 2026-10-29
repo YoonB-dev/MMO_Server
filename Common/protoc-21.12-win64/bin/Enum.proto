@@ -2,3 +2,10 @@ syntax = "proto3";
 package Protocol;
 
 // 패킷에서 공통으로 쓰는 enum (Protocol.proto에서 import "Enum.proto";로 사용)
+
+enum ObjectType
+{
+	OBJECT_TYPE_NONE = 0;
+	OBJECT_TYPE_PLAYER = 1;
+	OBJECT_TYPE_MONSTER = 2;
+}

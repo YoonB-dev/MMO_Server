@@ -13,6 +13,9 @@
     <Filter Include="Packet\Generated">
       <UniqueIdentifier>{3B1E8E61-6F0A-4C7B-9C55-1F1C2E8A7A04}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Game">
+      <UniqueIdentifier>{3B1E8E61-6F0A-4C7B-9C55-1F1C2E8A7A06}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Utils">
       <UniqueIdentifier>{3B1E8E61-6F0A-4C7B-9C55-1F1C2E8A7A05}</UniqueIdentifier>
     </Filter>
@@ -26,6 +29,12 @@
     </ClCompile>
     <ClCompile Include="GameSession.cpp">
       <Filter>Session</Filter>
+    </ClCompile>
+    <ClCompile Include="GameObject.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="Room.cpp">
+      <Filter>Game</Filter>
     </ClCompile>
     <ClCompile Include="GameSessionManager.cpp">
       <Filter>Session</Filter>
@@ -49,6 +58,15 @@
     </ClInclude>
     <ClInclude Include="GameSession.h">
       <Filter>Session</Filter>
+    </ClInclude>
+    <ClInclude Include="GameObject.h">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="Player.h">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="Room.h">
+      <Filter>Game</Filter>
     </ClInclude>
     <ClInclude Include="GameSessionManager.h">
       <Filter>Session</Filter>

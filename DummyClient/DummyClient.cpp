@@ -4,8 +4,8 @@
 #include "ServerSession.h"
 #include "ServerPacketHandler.h"
 
-// 접속 확인용 더미 클라이언트: CLIENT_COUNT명이 접속해서 1초마다 C_PING -> S_PING 왕복 시간 출력
-static const int32 CLIENT_COUNT = 1;
+// 접속 확인용 더미 클라이언트: CLIENT_COUNT명이 접속해서 게임에 입장하고, 1초마다 C_PING -> S_PING 왕복 시간 출력
+static const int32 CLIENT_COUNT = 3;
 static const int32 IOCP_THREAD_COUNT = 2;
 
 int main()

@@ -1,6 +1,8 @@
 ﻿#include "pch.h"
 #include "ClientPacketHandler.h"
 #include "GameSession.h"
+#include "Player.h"
+#include "Room.h"
 
 // ClientPacketHandler.h는 빌드할 때마다 Protocol.proto에서 생성된다 (Common/protoc-21.12-win64/bin/GenPackets.bat)
 //   -> C_로 시작하는 패킷을 proto에 추가하면 여기에 Handle_C_XXX를 만들어야 링크된다
@@ -18,5 +20,18 @@ bool Handle_C_PING(PacketSessionRef& session, Protocol::C_PING& pkt)
 	Protocol::S_PING pongPkt;
 	pongPkt.set_client_time_us(pkt.client_time_us());
 	session->Send(ClientPacketHandler::MakeSendBuffer(pongPkt));
+	return true;
+}
+
+bool Handle_C_ENTER_GAME(PacketSessionRef& session, Protocol::C_ENTER_GAME& pkt)
+{
+	GameSessionRef gameSession = static_pointer_cast<GameSession>(session);
+	if (gameSession->GetPlayer() != nullptr)
+		return false;	// 이미 입장한 세션
+
+	PlayerRef player = MakeShared<Player>(gameSession);
+	gameSession->SetPlayer(player);
+
+	GRoom->DoAsync(&Room::Enter, player);	// 실제 입장은 Room의 줄에서
 	return true;
 }

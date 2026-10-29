@@ -9,4 +9,10 @@ public:
 	virtual void OnDisconnected() override;
 	virtual void OnRecvPacket(BYTE* buffer, int32 len) override;
 	virtual void OnSend(int32 len) override;
+
+	PlayerRef	GetPlayer() { return _player; }
+	void		SetPlayer(PlayerRef player) { _player = player; }
+
+private:
+	PlayerRef	_player;	// C_ENTER_GAME 전에는 nullptr
 };

@@ -1,6 +1,9 @@
 syntax = "proto3";
 package Protocol;
 
+import "Enum.proto";
+import "Struct.proto";
+
 // 패킷 이름 규칙: C_ = 클라이언트 -> 서버, S_ = 서버 -> 클라이언트
 // GenPackets는 줄 맨 앞이 'message'인 줄을 위에서부터 읽어 1000번부터 패킷 ID를 붙인다
 //   -> 새 패킷은 맨 아래에 추가 (중간에 넣으면 뒤 패킷 ID가 전부 밀림)
@@ -16,4 +19,25 @@ message C_PING
 message S_PING
 {
 	int64 client_time_us = 1;
+}
+
+// ==================== 입장 / 퇴장 ====================
+message C_ENTER_GAME
+{
+}
+
+message S_ENTER_GAME
+{
+	bool success = 1;
+	ObjectInfo player = 2;	// 내 캐릭터
+}
+
+message S_SPAWN
+{
+	repeated ObjectInfo objects = 1;	// 새로 보이게 된 객체들
+}
+
+message S_DESPAWN
+{
+	repeated uint64 object_ids = 1;	// 사라진 객체들
 }
