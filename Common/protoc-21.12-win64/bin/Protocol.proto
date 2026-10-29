@@ -1,7 +1,6 @@
 syntax = "proto3";
 package Protocol;
 
-import "Enum.proto";
 import "Struct.proto";
 
 // 패킷 이름 규칙: C_ = 클라이언트 -> 서버, S_ = 서버 -> 클라이언트
