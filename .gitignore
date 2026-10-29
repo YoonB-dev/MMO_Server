@@ -23,6 +23,9 @@ DummyClient/ServerPacketHandler.h
 # 로컬 설정 (DB 비밀번호 포함) -> config.example.ini를 복사해서 사용
 GameServer/config.ini
 
+# 테스트 실행 로그 (Test/Run-Test.ps1)
+Test/logs/
+
 # Python (Tools/PacketGenerator)
 __pycache__/
 Tools/PacketGenerator/build/
