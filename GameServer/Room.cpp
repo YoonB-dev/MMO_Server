@@ -7,6 +7,38 @@
 // main에서 생성 (전역 변수 초기화 시점에는 ServerCore의 GMemory가 아직 없을 수 있음)
 RoomRef GRoom;
 
+void Room::Start()
+{
+	const uint64 now = ::GetTickCount64();
+	_nextTickTime = now + TICK_INTERVAL_MS;
+	_logStartTime = now;
+	DoTimer(TICK_INTERVAL_MS, &Room::Tick);
+}
+
+void Room::Tick()
+{
+	_tick++;
+
+	// (3~4단계) 여기서 입력 적용 -> 이동 계산 -> S_MOVE 전송
+
+	const uint64 now = ::GetTickCount64();
+
+	if (_tick % TICK_LOG_INTERVAL == 0)
+	{
+		const double avgMs = static_cast<double>(now - _logStartTime) / TICK_LOG_INTERVAL;
+		cout << "[Room] tick " << _tick << ", avg interval " << avgMs << "ms" << endl;
+		_logStartTime = now;
+	}
+
+	// 목표 시각을 누적해서 다음 틱 예약 -> 한 번 늦게 실행돼도 다음 간격이 밀리지 않음
+	_nextTickTime += TICK_INTERVAL_MS;
+	if (now > _nextTickTime + MAX_TICK_DELAY_MS)
+		_nextTickTime = now;	// 너무 밀렸으면(서버 멈춤 등) 몰아서 따라잡지 않고 기준을 새로 잡음
+
+	const uint64 delay = (_nextTickTime > now) ? (_nextTickTime - now) : 0;
+	DoTimer(delay, &Room::Tick);
+}
+
 void Room::Enter(PlayerRef player)
 {
 	const uint64 myId = player->GetObjectId();

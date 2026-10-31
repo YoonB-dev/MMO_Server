@@ -93,6 +93,7 @@ int main()
 
 	ClientPacketHandler::Init();
 	GRoom = MakeShared<Room>();
+	GRoom->Start();
 
 	ServerServiceRef service = StartServerService();
 	if (service == nullptr)
