@@ -2,6 +2,8 @@
 #include "ServerSession.h"
 #include "ServerPacketHandler.h"
 
+bool GInputTest = false;
+
 int64 NowUs()
 {
 	return chrono::duration_cast<chrono::microseconds>(chrono::steady_clock::now().time_since_epoch()).count();

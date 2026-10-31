@@ -18,6 +18,8 @@ private:
 	int32 _clientId = 0;	// 이 프로세스 안에서 1, 2, 3 ... (로그 구분용)
 };
 
+extern bool GInputTest;	// --input-test: 입장하면 검증용 입력 묶음을 한 번 보냄 (main에서 접속 전에 한 번 정함)
+
 int64 NowUs();
 
 // 여러 IOCP 스레드가 동시에 출력해도 줄이 섞이지 않게, 완성된 한 줄을 락 안에서 한 번에 출력

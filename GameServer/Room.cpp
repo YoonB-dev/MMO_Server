@@ -3,6 +3,7 @@
 #include "Player.h"
 #include "GameSession.h"
 #include "ClientPacketHandler.h"
+#include <cmath>
 
 // main에서 생성 (전역 변수 초기화 시점에는 ServerCore의 GMemory가 아직 없을 수 있음)
 RoomRef GRoom;
@@ -19,7 +20,10 @@ void Room::Tick()
 {
 	_tick++;
 
-	// (3~4단계) 여기서 입력 적용 -> 이동 계산 -> S_MOVE 전송
+	if (_tick % TICKS_PER_SECOND == 0)
+		ResetInputCounts();
+
+	// (4단계) 여기서 입력 적용 -> 이동 계산 -> S_MOVE 전송
 
 	const uint64 now = ::GetTickCount64();
 
@@ -81,6 +85,54 @@ void Room::Leave(uint64 objectId)
 	Protocol::S_DESPAWN pkt;
 	pkt.add_object_ids(objectId);
 	Broadcast(ClientPacketHandler::MakeSendBuffer(pkt), objectId);
+}
+
+void Room::HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 buttons, uint32 seq)
+{
+	// 입력이 줄에서 기다리는 사이 이미 Leave가 처리된 플레이어
+	if (_players.find(player->GetObjectId()) == _players.end())
+		return;
+
+	// 개수 제한: 검사보다 먼저 센다 (이상한 입력을 무한히 보내는 것도 막기 위해)
+	if (++player->inputCount > MAX_INPUTS_PER_SECOND)
+		return RejectInput(player, seq, "rate");
+
+	// 순서: 이미 받은 번호 이하면 옛날 입력이거나 중복
+	if (seq <= player->lastInput.seq)
+		return RejectInput(player, seq, "old seq");
+
+	// 값: NaN이나 무한대면 이후 위치 계산이 전부 망가짐
+	if (std::isfinite(dirX) == false || std::isfinite(dirZ) == false)
+		return RejectInput(player, seq, "invalid dir");
+
+	// 길이 정리: 1보다 길면 방향은 유지하고 길이만 1로 (속도 핵 방지), 거의 0이면 멈춤
+	const float length = std::sqrt(dirX * dirX + dirZ * dirZ);
+	if (length < MIN_DIR_LENGTH)
+	{
+		dirX = 0.f;
+		dirZ = 0.f;
+	}
+	else if (length > 1.f)
+	{
+		dirX /= length;
+		dirZ /= length;
+	}
+
+	// 같은 틱 안에 또 오면 덮어씀 -> 틱은 마지막 입력 하나만 적용
+	player->lastInput = MoveInput{ dirX, dirZ, buttons, seq };
+	player->hasNewInput = true;
+}
+
+void Room::ResetInputCounts()
+{
+	for (auto& [id, player] : _players)
+		player->inputCount = 0;
+}
+
+void Room::RejectInput(PlayerRef player, uint32 seq, const char* reason)
+{
+	cout << "[Room] reject input: player " << player->GetObjectId()
+		<< ", seq " << seq << ", reason " << reason << endl;
 }
 
 void Room::Broadcast(SendBufferRef sendBuffer, uint64 exceptId)

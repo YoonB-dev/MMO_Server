@@ -29,11 +29,40 @@ bool Handle_S_PING(PacketSessionRef& session, Protocol::S_PING& pkt)
 	return true;
 }
 
+static void SendMoveInput(PacketSessionRef& session, float dirX, float dirZ, uint32 seq)
+{
+	Protocol::C_MOVE_INPUT pkt;
+	pkt.set_dir_x(dirX);
+	pkt.set_dir_z(dirZ);
+	pkt.set_seq(seq);
+	session->Send(ServerPacketHandler::MakeSendBuffer(pkt));
+}
+
+// 서버 입력 검증 확인용 (Test/Scenarios/MoveInputValidation.ps1)
+static void SendInputTestBurst(PacketSessionRef& session)
+{
+	const float nan = numeric_limits<float>::quiet_NaN();
+
+	SendMoveInput(session, 1.f, 0.f, 1);		// 통과
+	SendMoveInput(session, 100.f, 0.f, 2);		// 통과 (길이 1로 줄어듦)
+	SendMoveInput(session, nan, 0.f, 3);		// reject: invalid dir
+	SendMoveInput(session, 0.f, 1.f, 2);		// reject: old seq
+	SendMoveInput(session, 0.f, 0.f, 4);		// 통과 (멈춤)
+
+	// 개수 제한: 위 5개 포함 총 70개를 한꺼번에 보냄
+	//   -> 중간에 1초 경계(카운트 초기화)가 껴서 둘로 나뉘어도 한쪽은 35개 이상이라 rate가 반드시 생김
+	for (uint32 seq = 10; seq < 75; seq++)
+		SendMoveInput(session, 1.f, 0.f, seq);
+}
+
 bool Handle_S_ENTER_GAME(PacketSessionRef& session, Protocol::S_ENTER_GAME& pkt)
 {
 	ostringstream line;
 	line << "S_ENTER_GAME success=" << pkt.success() << " myId=" << pkt.player().object_id();
 	Log(ClientIdOf(session), line.str());
+
+	if (GInputTest)
+		SendInputTestBurst(session);
 	return true;
 }
 

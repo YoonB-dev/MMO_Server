@@ -5,7 +5,7 @@
 #include "ServerPacketHandler.h"
 
 // 접속 확인용 더미 클라이언트: N명이 접속해서 게임에 입장하고, 1초마다 C_PING -> S_PING 왕복 시간 출력
-//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping]
+//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--input-test]
 //   인자 없이 실행하면 3명, 127.0.0.1:7777, ping 사용 (Test/Run-Test.ps1에서 옵션을 넘겨서 사용)
 static const int32 IOCP_THREAD_COUNT = 2;
 
@@ -15,6 +15,7 @@ struct ClientOptions
 	uint16	port = 7777;
 	int32	count = 3;
 	bool	ping = true;
+	bool	inputTest = false;	// 입장 후 검증용 이동 입력 묶음 전송
 };
 
 ClientOptions ParseOptions(int argc, char* argv[])
@@ -38,6 +39,8 @@ ClientOptions ParseOptions(int argc, char* argv[])
 		}
 		else if (arg == "--no-ping")
 			options.ping = false;
+		else if (arg == "--input-test")
+			options.inputTest = true;
 		else
 			Log("[Client] Unknown option: " + arg);
 	}
@@ -50,6 +53,7 @@ int main(int argc, char* argv[])
 	::SetConsoleOutputCP(CP_UTF8);
 
 	const ClientOptions options = ParseOptions(argc, argv);
+	GInputTest = options.inputTest;
 
 	this_thread::sleep_for(1s); // 같이 실행할 때 서버가 먼저 열리도록 잠깐 대기
 	ServerPacketHandler::Init();

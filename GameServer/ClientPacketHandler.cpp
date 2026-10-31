@@ -38,6 +38,12 @@ bool Handle_C_ENTER_GAME(PacketSessionRef& session, Protocol::C_ENTER_GAME& pkt)
 
 bool Handle_C_MOVE_INPUT(PacketSessionRef& session, Protocol::C_MOVE_INPUT& pkt)
 {
-	// TODO(3단계): 검증 후 GRoom->DoAsync(&Room::HandleMoveInput, ...)
+	GameSessionRef gameSession = static_pointer_cast<GameSession>(session);
+	PlayerRef player = gameSession->GetPlayer();
+	if (player == nullptr)
+		return false;	// 아직 입장 안 한 세션의 입력
+
+	// 검증과 저장은 Room의 줄에서 (Player의 입력 상태는 Room 안에서만 만짐)
+	GRoom->DoAsync(&Room::HandleMoveInput, player, pkt.dir_x(), pkt.dir_z(), pkt.buttons(), pkt.seq());
 	return true;
 }
