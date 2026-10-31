@@ -61,8 +61,12 @@ bool Handle_S_ENTER_GAME(PacketSessionRef& session, Protocol::S_ENTER_GAME& pkt)
 	line << "S_ENTER_GAME success=" << pkt.success() << " myId=" << pkt.player().object_id();
 	Log(ClientIdOf(session), line.str());
 
+	static_pointer_cast<ServerSession>(session)->myId = pkt.player().object_id();
+
 	if (GInputTest)
 		SendInputTestBurst(session);
+	if (GMoveTest)
+		SendMoveInput(session, 100.f, 0.f, 1);	// 오른쪽. 길이 100 -> 서버가 1로 줄여야 정상 속도
 	return true;
 }
 
@@ -76,11 +80,61 @@ bool Handle_S_SPAWN(PacketSessionRef& session, Protocol::S_SPAWN& pkt)
 	return true;
 }
 
+// 서버 이동 확인용 (Test/Scenarios/Move.ps1)
+//   seq 1 (오른쪽) -> 처음 MOVING이 찍힌 틱부터 20틱 이상 지난 S_MOVE를 받으면 seq 2 (멈춤)
+//   -> 멈춤(IDLE, ack 2)이 오면 최종 위치 판정
+//   멈춤은 4틱마다 오는 S_MOVE를 받고 보내고, 서버에 도착하는 데 0~1틱이 더 걸려서 x는 정확히 5가 아니라 5.25 ~ 6.5
+static void UpdateMoveTest(PacketSessionRef& session, uint64 serverTick, const Protocol::MoveEntry& entry)
+{
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+	const Protocol::MoveInfo& move = entry.move_info();
+
+	if (me->moveStartTick == 0 && move.state() == Protocol::MOVE_STATE_MOVING)
+		me->moveStartTick = serverTick;
+
+	if (me->moveStopSent == false && me->moveStartTick != 0 && serverTick >= me->moveStartTick + 20)
+	{
+		SendMoveInput(session, 0.f, 0.f, 2);
+		me->moveStopSent = true;
+		return;
+	}
+
+	if (me->moveStopSent && move.state() == Protocol::MOVE_STATE_IDLE && entry.ack_seq() == 2)
+	{
+		const Protocol::PosInfo& pos = move.pos_info();
+		const bool ok = (pos.x() >= 5.f && pos.x() <= 6.5f)
+			&& std::fabs(pos.z()) < 0.001f
+			&& std::fabs(pos.yaw() - 90.f) < 0.01f;
+
+		ostringstream line;
+		line << "MOVE_TEST " << (ok ? "ok" : "fail") << " x=" << pos.x() << " z=" << pos.z() << " yaw=" << pos.yaw();
+		Log(me->GetClientId(), line.str());
+	}
+}
+
 bool Handle_S_MOVE(PacketSessionRef& session, Protocol::S_MOVE& pkt)
 {
 	ostringstream line;
 	line << "S_MOVE tick=" << pkt.server_tick() << " count=" << pkt.moves_size();
 	Log(ClientIdOf(session), line.str());
+
+	// 내 캐릭터 항목만 따로 출력
+	const uint64 myId = static_pointer_cast<ServerSession>(session)->myId;
+	for (const Protocol::MoveEntry& entry : pkt.moves())
+	{
+		if (entry.object_id() != myId)
+			continue;
+
+		const Protocol::MoveInfo& move = entry.move_info();
+		ostringstream myLine;
+		myLine << "MY_MOVE tick=" << pkt.server_tick()
+			<< " x=" << move.pos_info().x() << " z=" << move.pos_info().z() << " yaw=" << move.pos_info().yaw()
+			<< " state=" << move.state() << " ack=" << entry.ack_seq();
+		Log(ClientIdOf(session), myLine.str());
+
+		if (GMoveTest)
+			UpdateMoveTest(session, pkt.server_tick(), entry);
+	}
 	return true;
 }
 

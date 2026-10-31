@@ -3,6 +3,7 @@
 #include "ServerPacketHandler.h"
 
 bool GInputTest = false;
+bool GMoveTest = false;
 
 int64 NowUs()
 {

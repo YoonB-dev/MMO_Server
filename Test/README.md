@@ -35,6 +35,7 @@ powershell -ExecutionPolicy Bypass -File .\Test\Run-Test.ps1 -All
 | `EnterLeave` | A 3명 + B 3명 입장, 스폰 수, B 종료 시 A가 디스폰 9개 수신 |
 | `ManyClients` | 100명 동시 입장, 한꺼번에 종료해도 서버 생존 |
 | `MoveInputValidation` | 이상한 이동 입력(NaN, 중복 seq, 초당 30개 초과)을 서버가 버리는지 |
+| `Move` | 오른쪽 약 1초 이동 후 멈춤: 위치 약 5m, yaw 90, ack 2. 다른 클라도 S_MOVE 수신 |
 
 ## 시나리오 추가
 

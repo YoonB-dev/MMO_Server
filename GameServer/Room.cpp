@@ -4,6 +4,7 @@
 #include "GameSession.h"
 #include "ClientPacketHandler.h"
 #include <cmath>
+#include <algorithm>
 
 // main에서 생성 (전역 변수 초기화 시점에는 ServerCore의 GMemory가 아직 없을 수 있음)
 RoomRef GRoom;
@@ -23,7 +24,7 @@ void Room::Tick()
 	if (_tick % TICKS_PER_SECOND == 0)
 		ResetInputCounts();
 
-	// (4단계) 여기서 입력 적용 -> 이동 계산 -> S_MOVE 전송
+	UpdateMovement();	// 입력 반영 -> 이동 -> S_MOVE 전송
 
 	const uint64 now = ::GetTickCount64();
 
@@ -127,6 +128,70 @@ void Room::ResetInputCounts()
 {
 	for (auto& [id, player] : _players)
 		player->inputCount = 0;
+}
+
+void Room::UpdateMovement()
+{
+	Protocol::S_MOVE pkt;
+	pkt.set_server_tick(_tick);
+
+	const bool resendTick = (_tick % MOVE_RESEND_TICKS == 0);
+
+	for (auto& [id, player] : _players)
+	{
+		const bool changed = ApplyInput(player);
+		MovePlayer(player);
+
+		// 방향이 바뀌었으면 바로, 움직이는 중이면 4틱마다 보냄 (멈춰 있으면 안 보냄)
+		const bool moving = (player->GetMoveInfo()->state() == Protocol::MOVE_STATE_MOVING);
+		if (changed || (moving && resendTick))
+		{
+			Protocol::MoveEntry* entry = pkt.add_moves();
+			entry->set_object_id(id);
+			*entry->mutable_move_info() = *player->GetMoveInfo();
+			entry->set_ack_seq(player->lastInput.seq);	// 받아들인 입력은 위 ApplyInput에서 전부 적용됐으므로 = 적용한 마지막 번호
+		}
+	}
+
+	// 한 틱에 보낼 사람들을 한 패킷으로 묶어서 전체(본인 포함)에 전송
+	if (pkt.moves_size() > 0)
+		Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
+}
+
+// 우편함에 새 입력이 있으면 이동 방향/상태에 반영. 반영했으면 true
+bool Room::ApplyInput(const PlayerRef& player)
+{
+	if (player->hasNewInput == false)
+		return false;
+	player->hasNewInput = false;	// 꺼냈으니 다음 틱엔 "새 입력 없음"
+
+	const MoveInput& input = player->lastInput;
+	Protocol::MoveInfo* moveInfo = player->GetMoveInfo();
+	moveInfo->set_dir_x(input.dirX);
+	moveInfo->set_dir_z(input.dirZ);
+
+	// 거의 0인 방향은 HandleMoveInput에서 정확히 0으로 바꿔 두었으므로 == 비교로 충분
+	const bool stop = (input.dirX == 0.f && input.dirZ == 0.f);
+	moveInfo->set_state(stop ? Protocol::MOVE_STATE_IDLE : Protocol::MOVE_STATE_MOVING);
+
+	// 바라보는 방향 (Unity 기준 +z = 0도, +x = 90도). 멈출 때는 마지막으로 보던 방향 유지
+	if (stop == false)
+		moveInfo->mutable_pos_info()->set_yaw(std::atan2(input.dirX, input.dirZ) * RAD_TO_DEG);
+
+	return true;
+}
+
+void Room::MovePlayer(const PlayerRef& player)
+{
+	Protocol::MoveInfo* moveInfo = player->GetMoveInfo();
+	if (moveInfo->state() != Protocol::MOVE_STATE_MOVING)
+		return;
+
+	const float step = MOVE_SPEED * TICK_DT;	// 한 틱에 0.25m
+	Protocol::PosInfo* pos = moveInfo->mutable_pos_info();
+	pos->set_x(std::clamp(pos->x() + moveInfo->dir_x() * step, -WORLD_HALF_SIZE, WORLD_HALF_SIZE));
+	pos->set_z(std::clamp(pos->z() + moveInfo->dir_z() * step, -WORLD_HALF_SIZE, WORLD_HALF_SIZE));
+	// y는 아직 항상 0 (점프 단계에서 vel_y로 처리)
 }
 
 void Room::RejectInput(PlayerRef player, uint32 seq, const char* reason)
