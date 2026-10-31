@@ -14,10 +14,28 @@ message PosInfo
 	float yaw = 4;
 }
 
+// 이동 정보 (위치 + 방향 + 상태). ObjectInfo, MoveEntry가 같이 사용
+message MoveInfo
+{
+	PosInfo pos_info = 1;	// x, y, z, yaw
+	float dir_x = 2;		// 수평 이동 방향 (멈춰 있으면 0, 0)
+	float dir_z = 3;
+	float vel_y = 4;		// 세로 속도 (점프용, 지금은 항상 0)
+	MoveState state = 5;
+}
+
 // 월드에 존재하는 객체 하나 (플레이어, 몬스터 공통)
 message ObjectInfo
 {
 	uint64 object_id = 1;
 	ObjectType object_type = 2;
-	PosInfo pos_info = 3;
+	MoveInfo move_info = 3;
+}
+
+// S_MOVE 안의 한 명분
+message MoveEntry
+{
+	uint64 object_id = 1;
+	MoveInfo move_info = 2;
+	uint32 ack_seq = 3;		// 이 플레이어 입력 중 서버가 마지막으로 적용한 번호
 }

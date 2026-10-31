@@ -35,3 +35,9 @@ bool Handle_C_ENTER_GAME(PacketSessionRef& session, Protocol::C_ENTER_GAME& pkt)
 	GRoom->DoAsync(&Room::Enter, player);	// 실제 입장은 Room의 줄에서
 	return true;
 }
+
+bool Handle_C_MOVE_INPUT(PacketSessionRef& session, Protocol::C_MOVE_INPUT& pkt)
+{
+	// TODO(3단계): 검증 후 GRoom->DoAsync(&Room::HandleMoveInput, ...)
+	return true;
+}

@@ -47,6 +47,14 @@ bool Handle_S_SPAWN(PacketSessionRef& session, Protocol::S_SPAWN& pkt)
 	return true;
 }
 
+bool Handle_S_MOVE(PacketSessionRef& session, Protocol::S_MOVE& pkt)
+{
+	ostringstream line;
+	line << "S_MOVE tick=" << pkt.server_tick() << " count=" << pkt.moves_size();
+	Log(ClientIdOf(session), line.str());
+	return true;
+}
+
 bool Handle_S_DESPAWN(PacketSessionRef& session, Protocol::S_DESPAWN& pkt)
 {
 	ostringstream line;

@@ -10,8 +10,9 @@ public:
 
 	uint64					GetObjectId() const { return _objectInfo.object_id(); }
 	Protocol::ObjectInfo&	GetObjectInfo() { return _objectInfo; }
-	Protocol::PosInfo*		GetPosInfo() { return _objectInfo.mutable_pos_info(); }
+	Protocol::MoveInfo*		GetMoveInfo() { return _objectInfo.mutable_move_info(); }
+	Protocol::PosInfo*		GetPosInfo() { return GetMoveInfo()->mutable_pos_info(); }
 
 private:
-	Protocol::ObjectInfo	_objectInfo;	// id, 타입, 위치(PosInfo)를 합성으로 보관 -> 패킷에 그대로 복사해서 보냄
+	Protocol::ObjectInfo	_objectInfo;	// id, 타입, 이동 정보(MoveInfo)를 합성으로 보관 -> 패킷에 그대로 복사해서 보냄
 };

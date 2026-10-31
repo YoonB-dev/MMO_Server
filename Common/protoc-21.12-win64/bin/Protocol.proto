@@ -40,3 +40,20 @@ message S_DESPAWN
 {
 	repeated uint64 object_ids = 1;	// 사라진 객체들
 }
+
+// ==================== 이동 ====================
+// 클라 -> 서버: 이동 의도. 방향/버튼이 바뀔 때만 보냄 (멈추면 방향 0, 0)
+message C_MOVE_INPUT
+{
+	float dir_x = 1;	// 월드 기준 수평 방향 (카메라 기준 변환은 클라가 함)
+	float dir_z = 2;
+	uint32 buttons = 3;	// 비트 플래그. bit0 = 점프 (지금은 무시)
+	uint32 seq = 4;		// 입력 번호 1, 2, 3 ...
+}
+
+// 서버 -> 클라: 한 틱 동안 바뀐 이동을 한 패킷에 묶음
+message S_MOVE
+{
+	uint64 server_tick = 1;
+	repeated MoveEntry moves = 2;
+}
