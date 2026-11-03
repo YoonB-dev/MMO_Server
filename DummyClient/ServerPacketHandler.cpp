@@ -160,6 +160,10 @@ static void UpdateChaseTest(PacketSessionRef& session, uint64 serverTick, const 
 				SendMoveInput(session, -dz, dx, ++me->chaseSeq);
 				me->turnStrafeSent = true;
 			}
+
+			// --flee-test: 몬스터 반대 방향 (-dx, -dz)로 계속 달림 -> 몬스터가 쫓다가 스폰에서 20m를 넘으면 포기하고 돌아감
+			if (GFleeTest)
+				SendMoveInput(session, -dx, -dz, ++me->chaseSeq);
 		}
 		return;
 	}

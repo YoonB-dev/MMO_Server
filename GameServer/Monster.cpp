@@ -21,6 +21,7 @@ static const char* ToString(MonsterState state)
 	case MonsterState::Idle:	return "Idle";
 	case MonsterState::Patrol:	return "Patrol";
 	case MonsterState::Chase:	return "Chase";
+	case MonsterState::Return:	return "Return";
 	}
 	return "?";
 }
@@ -39,6 +40,7 @@ void Monster::Update(Room& room, float dt)
 	case MonsterState::Idle:	UpdateIdle(room, dt);	break;
 	case MonsterState::Patrol:	UpdatePatrol(room, dt);	break;
 	case MonsterState::Chase:	UpdateChase(room, dt);	break;
+	case MonsterState::Return:	UpdateReturn(dt);		break;
 	}
 }
 
@@ -64,26 +66,39 @@ void Monster::UpdatePatrol(Room& room, float dt)
 void Monster::UpdateChase(Room& room, float dt)
 {
 	PlayerRef target = room.FindPlayer(_targetId);
-	if (target == nullptr)	// 타겟이 방을 나감
-	{
-		StopMove();
-		SetState(MonsterState::Idle);
-		return;
-	}
+	if (target == nullptr)
+		return GiveUpChase("left");		// 타겟이 방을 나감
+
+	// 스폰에서 너무 멀리 끌려왔으면 포기 (몬스터를 맵 끝까지 끌고 가는 것 방지)
+	const Protocol::PosInfo* pos = GetPosInfo();
+	const float sx = pos->x() - _spawnX;
+	const float sz = pos->z() - _spawnZ;
+	if (sx * sx + sz * sz > LEASH_RANGE * LEASH_RANGE)
+		return GiveUpChase("leash");
 
 	const Protocol::PosInfo* targetPos = target->GetPosInfo();
-	const Protocol::PosInfo* pos = GetPosInfo();
 	const float dx = targetPos->x() - pos->x();
 	const float dz = targetPos->z() - pos->z();
+	const float distSq = dx * dx + dz * dz;
+
+	if (distSq > LOSE_RANGE * LOSE_RANGE)
+		return GiveUpChase("lost");		// 타겟이 너무 멀어짐
 
 	// 충분히 붙었으면 그 자리에서 기다림 (타겟이 멀어지면 다음 틱에 다시 쫓음)
-	if (dx * dx + dz * dz <= STOP_RANGE * STOP_RANGE)
+	if (distSq <= STOP_RANGE * STOP_RANGE)
 	{
 		StopMove();
 		return;
 	}
 
 	MoveTowards(targetPos->x(), targetPos->z(), CHASE_SPEED, dt);
+}
+
+// 스폰으로 돌아감. 이 동안은 TryDetect를 안 해서 플레이어를 무시 (돌아가다 다시 붙는 것 방지)
+void Monster::UpdateReturn(float dt)
+{
+	if (MoveTowards(_spawnX, _spawnZ, RETURN_SPEED, dt))
+		SetState(MonsterState::Idle);	// 도착 -> 다시 Seek
 }
 
 // Idle/Patrol 공통: 감지 거리 안의 가장 가까운 플레이어를 타겟으로 Chase 시작. 찾았으면 true
@@ -97,6 +112,13 @@ bool Monster::TryDetect(Room& room)
 	_targetId = player->GetObjectId();
 	SetState(MonsterState::Chase);
 	return true;
+}
+
+// Chase를 포기하고 스폰으로 (reason은 로그용: left / leash / lost)
+void Monster::GiveUpChase(const char* reason)
+{
+	cout << "[Monster " << GetObjectId() << "] give up target " << _targetId << " (" << reason << ")" << endl;
+	SetState(MonsterState::Return);
 }
 
 // 상태를 바꾸고, 새 상태를 시작할 때 할 일(대기 시간, 목적지 정하기)을 여기 한 곳에서 처리
@@ -116,6 +138,9 @@ void Monster::SetState(MonsterState next)
 		break;
 	case MonsterState::Chase:
 		break;	// 타겟(_targetId)은 TryDetect가 정해 둠
+	case MonsterState::Return:
+		_targetId = 0;	// 타겟을 잊음
+		break;
 	}
 
 	Protocol::PosInfo* pos = GetPosInfo();

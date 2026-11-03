@@ -41,6 +41,7 @@ extern bool GMoveTest;	// --move-test: 입장하면 오른쪽으로 약 1초 이
 extern bool GMonsterLog;	// --monster-log: S_MOVE의 몬스터 항목을 한 줄씩 출력
 extern bool GChaseTest;	// --chase-test: 가장 가까운 몬스터 쪽으로 걸어가서, 몬스터가 쫓아와 멈추는지 판정
 extern bool GTurnTest;	// --turn-test: chase-test 후 옆으로 피하면서, 몬스터 방향이 꺾일 때 바로 오는 S_MOVE 확인
+extern bool GFleeTest;	// --flee-test: chase-test 후 몬스터 반대 방향으로 도망 (몬스터 복귀 확인용)
 
 int64 NowUs();
 

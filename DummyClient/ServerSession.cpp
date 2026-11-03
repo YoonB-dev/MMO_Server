@@ -7,6 +7,7 @@ bool GMoveTest = false;
 bool GMonsterLog = false;
 bool GChaseTest = false;
 bool GTurnTest = false;
+bool GFleeTest = false;
 
 int64 NowUs()
 {
