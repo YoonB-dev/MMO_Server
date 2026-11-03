@@ -24,9 +24,13 @@ class Monster : public GameObject
 public:
 	Monster(float x, float z);
 
-	// Room::Tick에서 매 틱 호출. 출발하거나 멈췄으면(IDLE <-> MOVING) true -> 바로 S_MOVE에 넣음
+	// Room::Tick에서 매 틱 호출 (보낼지는 Room의 전송 정책이 lastSentMove와 비교해서 정함)
 	//   room: 플레이어를 찾을 때만 빌려 씀 (멤버로 들고 있지 않음)
-	bool	Update(Room& room, float dt);
+	void	Update(Room& room, float dt);
+
+public:
+	// Room JobQueue 안에서만 접근 -> 락 없음
+	Protocol::MoveInfo	lastSentMove;	// 마지막으로 S_MOVE에 넣은 이동 (전송 정책의 비교 기준)
 
 private:
 	void	UpdateIdle(Room& room, float dt);

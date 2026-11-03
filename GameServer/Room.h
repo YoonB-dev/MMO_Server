@@ -2,6 +2,7 @@
 #include "JobQueue.h"
 
 namespace Protocol { class S_MOVE; }	// 참조로만 받으니 선언만 (Protocol.pb.h 전체를 include하지 않음)
+class MoveSendPolicy;
 
 // 게임 월드(전역 방 하나). 입장/퇴장/이동은 전부 DoAsync로 이 JobQueue에 넣어서 한 줄로 처리한다
 class Room : public JobQueue
@@ -10,7 +11,7 @@ class Room : public JobQueue
 	{
 		TICK_INTERVAL_MS = 50,		// 20Hz
 		TICKS_PER_SECOND = 1000 / TICK_INTERVAL_MS,	// 20
-		TICK_LOG_INTERVAL = 200,	// 200틱(10초)마다 틱 간격 측정 로그
+		TICK_LOG_INTERVAL = 200,	// 200틱(10초)마다 통계 로그 (틱 간격, 처리 시간, 몬스터 전송 수)
 		MAX_TICK_DELAY_MS = 1000,	// 이보다 밀리면 따라잡지 않고 기준 시각을 다시 잡음
 		MOVE_RESEND_TICKS = 4,		// 움직이는 중에는 4틱(200ms)마다 위치를 다시 보냄
 	};
@@ -23,6 +24,7 @@ class Room : public JobQueue
 	static constexpr float	RAD_TO_DEG = 57.2957795f;					// 라디안 -> 도 (180 / π)
 
 public:
+	void	SetMonsterSendPolicy(const MoveSendPolicy* policy);	// Start 전에 main에서 한 번
 	void	Start();				// 첫 틱 예약 (main에서 한 번)
 	void	Enter(PlayerRef player);
 	void	Leave(uint64 objectId);
@@ -35,6 +37,7 @@ public:
 private:
 	void	SpawnMonsters();
 	void	Tick();
+	void	LogStats(uint64 now);
 	void	ResetInputCounts();
 	void	UpdatePlayers(Protocol::S_MOVE& pkt);
 	void	UpdateMonsters(Protocol::S_MOVE& pkt);
@@ -51,6 +54,13 @@ private:
 	uint64	_tick = 0;				// 서버 틱 번호 (S_MOVE의 server_tick)
 	uint64	_nextTickTime = 0;		// 다음 틱 목표 시각 (GetTickCount64 기준, ms)
 	uint64	_logStartTime = 0;		// 틱 간격 측정 시작 시각
+
+	const MoveSendPolicy*	_monsterSendPolicy = nullptr;	// 몬스터 S_MOVE 전송 규칙. static 정책 객체를 빌려 씀 (소유 안 함)
+
+	// 10초(200틱) 통계 -> LogStats에서 출력 후 0으로
+	uint64	_workTimeSumUs = 0;		// 틱 처리 시간 합 (마이크로초)
+	uint64	_workTimeMaxUs = 0;		// 가장 오래 걸린 틱
+	uint64	_monsterMovesSent = 0;	// S_MOVE에 넣은 몬스터 항목 수
 };
 
 extern RoomRef GRoom;

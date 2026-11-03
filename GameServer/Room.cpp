@@ -4,8 +4,10 @@
 #include "Monster.h"
 #include "GameSession.h"
 #include "ClientPacketHandler.h"
+#include "MoveSendPolicy.h"
 #include <cmath>
 #include <algorithm>
+#include <chrono>
 
 // main에서 생성 (전역 변수 초기화 시점에는 ServerCore의 GMemory가 아직 없을 수 있음)
 RoomRef GRoom;
@@ -24,6 +26,12 @@ static constexpr SpawnPoint MONSTER_SPAWNS[] =
 	{ -20.f, 10.f },
 	{ 0.f, -25.f },
 };
+
+void Room::SetMonsterSendPolicy(const MoveSendPolicy* policy)
+{
+	_monsterSendPolicy = policy;
+	cout << "[Room] monster send policy: " << policy->Name() << endl;
+}
 
 void Room::Start()
 {
@@ -51,6 +59,9 @@ void Room::Tick()
 {
 	_tick++;
 
+	// 게임 처리에 걸린 시간 측정 (GetTickCount64는 약 15ms 단위라 짧은 시간은 steady_clock으로)
+	const auto workStart = chrono::steady_clock::now();
+
 	if (_tick % TICKS_PER_SECOND == 0)
 		ResetInputCounts();
 
@@ -64,14 +75,15 @@ void Room::Tick()
 	if (pkt.moves_size() > 0)
 		Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
 
+	const uint64 workUs = chrono::duration_cast<chrono::microseconds>(chrono::steady_clock::now() - workStart).count();
+	_workTimeSumUs += workUs;
+	if (workUs > _workTimeMaxUs)
+		_workTimeMaxUs = workUs;
+
 	const uint64 now = ::GetTickCount64();
 
 	if (_tick % TICK_LOG_INTERVAL == 0)
-	{
-		const double avgMs = static_cast<double>(now - _logStartTime) / TICK_LOG_INTERVAL;
-		cout << "[Room] tick " << _tick << ", avg interval " << avgMs << "ms" << endl;
-		_logStartTime = now;
-	}
+		LogStats(now);
 
 	// 목표 시각을 누적해서 다음 틱 예약 -> 한 번 늦게 실행돼도 다음 간격이 밀리지 않음
 	_nextTickTime += TICK_INTERVAL_MS;
@@ -80,6 +92,24 @@ void Room::Tick()
 
 	const uint64 delay = (_nextTickTime > now) ? (_nextTickTime - now) : 0;
 	DoTimer(delay, &Room::Tick);
+}
+
+// 200틱(10초) 동안의 통계 출력 후 다음 구간을 위해 0으로
+//   avg interval: 틱 사이 간격 (50ms면 정상), work: 틱 안에서 게임 처리에 쓴 시간, monster moves: 보낸 몬스터 이동 수
+void Room::LogStats(uint64 now)
+{
+	const double avgMs = static_cast<double>(now - _logStartTime) / TICK_LOG_INTERVAL;
+	const double workAvgMs = _workTimeSumUs / 1000.0 / TICK_LOG_INTERVAL;
+	const double workMaxMs = _workTimeMaxUs / 1000.0;
+
+	cout << "[Room] tick " << _tick << ", avg interval " << avgMs << "ms"
+		<< ", work avg " << workAvgMs << "ms max " << workMaxMs << "ms"
+		<< ", monster moves " << _monsterMovesSent << " (" << _monsterSendPolicy->Name() << ")" << endl;
+
+	_logStartTime = now;
+	_workTimeSumUs = 0;
+	_workTimeMaxUs = 0;
+	_monsterMovesSent = 0;
 }
 
 void Room::Enter(PlayerRef player)
@@ -225,17 +255,20 @@ void Room::UpdateMonsters(Protocol::S_MOVE& pkt)
 
 	for (auto& [id, monster] : _monsters)
 	{
-		const bool changed = monster->Update(*this, TICK_DT);
+		monster->Update(*this, TICK_DT);
 
-		// 플레이어와 같은 규칙: 출발/멈춤은 바로, 움직이는 중이면 4틱마다
-		const bool moving = (monster->GetMoveInfo()->state() == Protocol::MOVE_STATE_MOVING);
-		if (changed || (moving && resendTick))
-		{
-			Protocol::MoveEntry* entry = pkt.add_moves();
-			entry->set_object_id(id);
-			*entry->mutable_move_info() = *monster->GetMoveInfo();
-			// ack_seq는 0 그대로 (몬스터는 클라 입력이 없음)
-		}
+		// 보낼지는 전송 정책이 결정 (마지막으로 보낸 이동 vs 지금 이동)
+		const Protocol::MoveInfo& now = *monster->GetMoveInfo();
+		if (_monsterSendPolicy->ShouldSend(monster->lastSentMove, now, resendTick) == false)
+			continue;
+
+		Protocol::MoveEntry* entry = pkt.add_moves();
+		entry->set_object_id(id);
+		*entry->mutable_move_info() = now;
+		// ack_seq는 0 그대로 (몬스터는 클라 입력이 없음)
+
+		monster->lastSentMove = now;
+		_monsterMovesSent++;
 	}
 }
 

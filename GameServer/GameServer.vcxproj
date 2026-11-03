@@ -94,6 +94,7 @@
     <ClCompile Include="Monster.cpp" />
     <ClCompile Include="Room.cpp" />
     <ClCompile Include="ClientPacketHandler.cpp" />
+    <ClCompile Include="MoveSendPolicy.cpp" />
     <ClCompile Include="Enum.pb.cc">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -113,6 +114,7 @@
     <ClInclude Include="Monster.h" />
     <ClInclude Include="Room.h" />
     <ClInclude Include="ClientPacketHandler.h" />
+    <ClInclude Include="MoveSendPolicy.h" />
     <ClInclude Include="Enum.pb.h" />
     <ClInclude Include="Struct.pb.h" />
     <ClInclude Include="Protocol.pb.h" />

@@ -32,18 +32,14 @@ Monster::Monster(float x, float z)
 	GetPosInfo()->set_z(z);
 }
 
-bool Monster::Update(Room& room, float dt)
+void Monster::Update(Room& room, float dt)
 {
-	const Protocol::MoveState before = GetMoveInfo()->state();
-
 	switch (_state)
 	{
 	case MonsterState::Idle:	UpdateIdle(room, dt);	break;
 	case MonsterState::Patrol:	UpdatePatrol(room, dt);	break;
 	case MonsterState::Chase:	UpdateChase(room, dt);	break;
 	}
-
-	return GetMoveInfo()->state() != before;
 }
 
 void Monster::UpdateIdle(Room& room, float dt)

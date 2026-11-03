@@ -109,12 +109,21 @@ static void StartChaseTest(PacketSessionRef& session, const Protocol::S_SPAWN& p
 		AimAtChaseTarget(session);
 }
 
-static void UpdateChaseTest(PacketSessionRef& session, const Protocol::MoveEntry& entry)
+// 방향 꺾임 전송 확인용 (Test/Scenarios/MonsterTurnSend.ps1, --turn-test = 위 추적 + 아래)
+//   몬스터가 앞에 멈춘 뒤 몬스터 쪽과 수직으로 걸어감 -> 쫓아오는 몬스터의 방향이 계속 꺾임
+//   4틱 주기 틱도 아니고 출발/멈춤도 아닌데(이전 항목도 MOVING) 몬스터 항목이 오면
+//   = 서버 전송 정책(angle)이 꺾임을 보고 바로 보낸 것 -> 'TURN_SEND'
+static constexpr uint64 SERVER_RESEND_TICKS = 4;	// 서버 Room::MOVE_RESEND_TICKS와 같은 값
+
+static void UpdateChaseTest(PacketSessionRef& session, uint64 serverTick, const Protocol::MoveEntry& entry)
 {
 	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
 	const Protocol::MoveInfo& move = entry.move_info();
 	me->chaseTargetX = move.pos_info().x();
 	me->chaseTargetZ = move.pos_info().z();
+
+	const int32 prevState = me->lastTargetState;
+	me->lastTargetState = move.state();
 
 	const float dx = me->chaseTargetX - me->myX;
 	const float dz = me->chaseTargetZ - me->myZ;
@@ -136,12 +145,31 @@ static void UpdateChaseTest(PacketSessionRef& session, const Protocol::MoveEntry
 	}
 
 	// 멈춘 뒤: 몬스터가 다가와서 멈추면(IDLE) 판정
-	if (me->chaseDone == false && move.state() == Protocol::MOVE_STATE_IDLE)
+	if (me->chaseDone == false)
+	{
+		if (move.state() == Protocol::MOVE_STATE_IDLE)
+		{
+			ostringstream line;
+			line << "CHASE_TEST " << (dist <= 2.f ? "ok" : "fail") << " target=" << entry.object_id() << " dist=" << dist;
+			Log(me->GetClientId(), line.str());
+			me->chaseDone = true;
+
+			// --turn-test: 몬스터 쪽 방향 (dx, dz)에 수직인 (-dz, dx)로 피함
+			if (GTurnTest)
+			{
+				SendMoveInput(session, -dz, dx, ++me->chaseSeq);
+				me->turnStrafeSent = true;
+			}
+		}
+		return;
+	}
+
+	const bool movingToMoving = (prevState == Protocol::MOVE_STATE_MOVING && move.state() == Protocol::MOVE_STATE_MOVING);
+	if (me->turnStrafeSent && movingToMoving && serverTick % SERVER_RESEND_TICKS != 0)
 	{
 		ostringstream line;
-		line << "CHASE_TEST " << (dist <= 2.f ? "ok" : "fail") << " target=" << entry.object_id() << " dist=" << dist;
+		line << "TURN_SEND tick=" << serverTick << " target=" << entry.object_id() << " dist=" << dist;
 		Log(me->GetClientId(), line.str());
-		me->chaseDone = true;
 	}
 }
 
@@ -233,7 +261,7 @@ bool Handle_S_MOVE(PacketSessionRef& session, Protocol::S_MOVE& pkt)
 			}
 
 			if (GChaseTest && entry.object_id() == me->chaseTargetId)
-				UpdateChaseTest(session, entry);
+				UpdateChaseTest(session, pkt.server_tick(), entry);
 			continue;
 		}
 

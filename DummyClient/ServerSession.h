@@ -28,6 +28,8 @@ public:
 	uint32	chaseSeq = 0;			// --chase-test: 보낸 이동 입력 번호
 	bool	chaseStopSent = false;	// --chase-test: 5m 안에 들어와서 멈춤 입력을 보냈는지
 	bool	chaseDone = false;		// --chase-test: 결과를 출력했는지
+	bool	turnStrafeSent = false;	// --turn-test: 옆으로 피하는 입력을 보냈는지
+	int32	lastTargetState = 0;	// --turn-test: 타겟 몬스터의 직전 항목 MoveState (MOVING -> MOVING 구분용)
 
 private:
 	int32 _clientId = 0;	// 이 프로세스 안에서 1, 2, 3 ... (로그 구분용)
@@ -38,6 +40,7 @@ extern bool GInputTest;	// --input-test: 입장하면 검증용 입력 묶음을
 extern bool GMoveTest;	// --move-test: 입장하면 오른쪽으로 약 1초 이동 후 멈추고 결과 판정
 extern bool GMonsterLog;	// --monster-log: S_MOVE의 몬스터 항목을 한 줄씩 출력
 extern bool GChaseTest;	// --chase-test: 가장 가까운 몬스터 쪽으로 걸어가서, 몬스터가 쫓아와 멈추는지 판정
+extern bool GTurnTest;	// --turn-test: chase-test 후 옆으로 피하면서, 몬스터 방향이 꺾일 때 바로 오는 S_MOVE 확인
 
 int64 NowUs();
 

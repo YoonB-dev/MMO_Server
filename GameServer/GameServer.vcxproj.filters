@@ -45,6 +45,9 @@
     <ClCompile Include="ClientPacketHandler.cpp">
       <Filter>Packet</Filter>
     </ClCompile>
+    <ClCompile Include="MoveSendPolicy.cpp">
+      <Filter>Packet</Filter>
+    </ClCompile>
     <ClCompile Include="Enum.pb.cc">
       <Filter>Packet\Generated</Filter>
     </ClCompile>
@@ -79,6 +82,9 @@
     </ClInclude>
     <ClInclude Include="ClientPacketHandler.h">
       <Filter>Packet\Generated</Filter>
+    </ClInclude>
+    <ClInclude Include="MoveSendPolicy.h">
+      <Filter>Packet</Filter>
     </ClInclude>
     <ClInclude Include="Enum.pb.h">
       <Filter>Packet\Generated</Filter>

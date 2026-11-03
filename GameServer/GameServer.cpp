@@ -5,6 +5,7 @@
 #include "ClientPacketHandler.h"
 #include "DBConnectionPool.h"
 #include "Room.h"
+#include "MoveSendPolicy.h"
 
 std::atomic<int64> g_inboundPacketCount(0);
 std::atomic<int64> g_outboundPacketCount(0);
@@ -81,9 +82,31 @@ void DoWorkerJob(ServerServiceRef& service)
 	}
 }
 
-int main()
+// GameServer.exe [--monster-send angle|every-tick]  (기본 angle, 프로파일링 비교용)
+const MoveSendPolicy* ParseMonsterSendPolicy(int argc, char* argv[])
+{
+	string name = "angle";
+
+	// argv[0]은 실행 파일 경로라서 1부터
+	for (int32 i = 1; i + 1 < argc; i++)
+	{
+		if (string(argv[i]) == "--monster-send")
+			name = argv[i + 1];
+	}
+
+	const MoveSendPolicy* policy = FindMoveSendPolicy(name);
+	if (policy == nullptr)
+		cout << "Unknown --monster-send: " << name << " (angle | every-tick)" << endl;
+	return policy;
+}
+
+int main(int argc, char* argv[])
 {
 	::SetConsoleOutputCP(CP_UTF8);
+
+	const MoveSendPolicy* monsterSendPolicy = ParseMonsterSendPolicy(argc, argv);
+	if (monsterSendPolicy == nullptr)
+		return -1;
 
 	if (LoadServerConfig() == false)
 		return -1;
@@ -93,6 +116,7 @@ int main()
 
 	ClientPacketHandler::Init();
 	GRoom = MakeShared<Room>();
+	GRoom->SetMonsterSendPolicy(monsterSendPolicy);
 	GRoom->Start();
 
 	ServerServiceRef service = StartServerService();
