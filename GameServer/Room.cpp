@@ -54,7 +54,14 @@ void Room::Tick()
 	if (_tick % TICKS_PER_SECOND == 0)
 		ResetInputCounts();
 
-	UpdateMovement();	// 입력 반영 -> 이동 -> S_MOVE 전송
+	// 이번 틱에 바뀐 이동을 한 패킷에 모아서 전체(본인 포함)에 전송. 플레이어 먼저 -> 몬스터
+	Protocol::S_MOVE pkt;
+	pkt.set_server_tick(_tick);
+	UpdatePlayers(pkt);
+	UpdateMonsters(pkt);
+
+	if (pkt.moves_size() > 0)
+		Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
 
 	const uint64 now = ::GetTickCount64();
 
@@ -163,11 +170,8 @@ void Room::ResetInputCounts()
 		player->inputCount = 0;
 }
 
-void Room::UpdateMovement()
+void Room::UpdatePlayers(Protocol::S_MOVE& pkt)
 {
-	Protocol::S_MOVE pkt;
-	pkt.set_server_tick(_tick);
-
 	const bool resendTick = (_tick % MOVE_RESEND_TICKS == 0);
 
 	for (auto& [id, player] : _players)
@@ -185,10 +189,26 @@ void Room::UpdateMovement()
 			entry->set_ack_seq(player->lastInput.seq);	// 받아들인 입력은 위 ApplyInput에서 전부 적용됐으므로 = 적용한 마지막 번호
 		}
 	}
+}
 
-	// 한 틱에 보낼 사람들을 한 패킷으로 묶어서 전체(본인 포함)에 전송
-	if (pkt.moves_size() > 0)
-		Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
+void Room::UpdateMonsters(Protocol::S_MOVE& pkt)
+{
+	const bool resendTick = (_tick % MOVE_RESEND_TICKS == 0);
+
+	for (auto& [id, monster] : _monsters)
+	{
+		const bool changed = monster->Update(TICK_DT);
+
+		// 플레이어와 같은 규칙: 출발/멈춤은 바로, 움직이는 중이면 4틱마다
+		const bool moving = (monster->GetMoveInfo()->state() == Protocol::MOVE_STATE_MOVING);
+		if (changed || (moving && resendTick))
+		{
+			Protocol::MoveEntry* entry = pkt.add_moves();
+			entry->set_object_id(id);
+			*entry->mutable_move_info() = *monster->GetMoveInfo();
+			// ack_seq는 0 그대로 (몬스터는 클라 입력이 없음)
+		}
+	}
 }
 
 // 우편함에 새 입력이 있으면 이동 방향/상태에 반영. 반영했으면 true
@@ -206,6 +226,7 @@ bool Room::ApplyInput(const PlayerRef& player)
 	// 거의 0인 방향은 HandleMoveInput에서 정확히 0으로 바꿔 두었으므로 == 비교로 충분
 	const bool stop = (input.dirX == 0.f && input.dirZ == 0.f);
 	moveInfo->set_state(stop ? Protocol::MOVE_STATE_IDLE : Protocol::MOVE_STATE_MOVING);
+	moveInfo->set_speed(stop ? 0.f : MOVE_SPEED);
 
 	// 바라보는 방향 (Unity 기준 +z = 0도, +x = 90도). 멈출 때는 마지막으로 보던 방향 유지
 	if (stop == false)

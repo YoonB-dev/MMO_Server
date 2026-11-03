@@ -4,6 +4,7 @@
 
 bool GInputTest = false;
 bool GMoveTest = false;
+bool GMonsterLog = false;
 
 int64 NowUs()
 {

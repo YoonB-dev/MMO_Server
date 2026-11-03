@@ -33,6 +33,9 @@
     <ClCompile Include="GameObject.cpp">
       <Filter>Game</Filter>
     </ClCompile>
+    <ClCompile Include="Monster.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
     <ClCompile Include="Room.cpp">
       <Filter>Game</Filter>
     </ClCompile>

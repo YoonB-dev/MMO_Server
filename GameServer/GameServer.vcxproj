@@ -91,6 +91,7 @@
     <ClCompile Include="GameSession.cpp" />
     <ClCompile Include="GameSessionManager.cpp" />
     <ClCompile Include="GameObject.cpp" />
+    <ClCompile Include="Monster.cpp" />
     <ClCompile Include="Room.cpp" />
     <ClCompile Include="ClientPacketHandler.cpp" />
     <ClCompile Include="Enum.pb.cc">

@@ -72,15 +72,20 @@ bool Handle_S_ENTER_GAME(PacketSessionRef& session, Protocol::S_ENTER_GAME& pkt)
 
 bool Handle_S_SPAWN(PacketSessionRef& session, Protocol::S_SPAWN& pkt)
 {
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+
 	ostringstream line;
 	line << "S_SPAWN ids:";
 	for (const Protocol::ObjectInfo& object : pkt.objects())
 	{
 		line << " " << object.object_id();
 		if (object.object_type() == Protocol::OBJECT_TYPE_MONSTER)
+		{
 			line << "(monster)";
+			me->monsterIds.insert(object.object_id());
+		}
 	}
-	Log(ClientIdOf(session), line.str());
+	Log(me->GetClientId(), line.str());
 	return true;
 }
 
@@ -118,23 +123,47 @@ static void UpdateMoveTest(PacketSessionRef& session, uint64 serverTick, const P
 
 bool Handle_S_MOVE(PacketSessionRef& session, Protocol::S_MOVE& pkt)
 {
-	ostringstream line;
-	line << "S_MOVE tick=" << pkt.server_tick() << " count=" << pkt.moves_size();
-	Log(ClientIdOf(session), line.str());
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
 
-	// 내 캐릭터 항목만 따로 출력
-	const uint64 myId = static_pointer_cast<ServerSession>(session)->myId;
+	// 플레이어/몬스터 항목 수를 나눠서 출력 (몬스터는 S_SPAWN에서 기록해 둔 id로 구분)
+	int32 monsterCount = 0;
 	for (const Protocol::MoveEntry& entry : pkt.moves())
 	{
-		if (entry.object_id() != myId)
+		if (me->monsterIds.count(entry.object_id()) > 0)
+			monsterCount++;
+	}
+
+	ostringstream line;
+	line << "S_MOVE tick=" << pkt.server_tick()
+		<< " players=" << (pkt.moves_size() - monsterCount) << " monsters=" << monsterCount;
+	Log(me->GetClientId(), line.str());
+
+	// 몬스터 항목(--monster-log)과 내 캐릭터 항목만 따로 출력
+	for (const Protocol::MoveEntry& entry : pkt.moves())
+	{
+		const Protocol::MoveInfo& move = entry.move_info();
+
+		if (me->monsterIds.count(entry.object_id()) > 0)
+		{
+			if (GMonsterLog)
+			{
+				ostringstream monsterLine;
+				monsterLine << "MONSTER_MOVE tick=" << pkt.server_tick() << " id=" << entry.object_id()
+					<< " x=" << move.pos_info().x() << " z=" << move.pos_info().z()
+					<< " state=" << move.state() << " speed=" << move.speed();
+				Log(me->GetClientId(), monsterLine.str());
+			}
+			continue;
+		}
+
+		if (entry.object_id() != me->myId)
 			continue;
 
-		const Protocol::MoveInfo& move = entry.move_info();
 		ostringstream myLine;
 		myLine << "MY_MOVE tick=" << pkt.server_tick()
 			<< " x=" << move.pos_info().x() << " z=" << move.pos_info().z() << " yaw=" << move.pos_info().yaw()
 			<< " state=" << move.state() << " ack=" << entry.ack_seq();
-		Log(ClientIdOf(session), myLine.str());
+		Log(me->GetClientId(), myLine.str());
 
 		if (GMoveTest)
 			UpdateMoveTest(session, pkt.server_tick(), entry);

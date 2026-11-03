@@ -1,6 +1,8 @@
 ﻿#pragma once
 #include "JobQueue.h"
 
+namespace Protocol { class S_MOVE; }	// 참조로만 받으니 선언만 (Protocol.pb.h 전체를 include하지 않음)
+
 // 게임 월드(전역 방 하나). 입장/퇴장/이동은 전부 DoAsync로 이 JobQueue에 넣어서 한 줄로 처리한다
 class Room : public JobQueue
 {
@@ -30,7 +32,8 @@ private:
 	void	SpawnMonsters();
 	void	Tick();
 	void	ResetInputCounts();
-	void	UpdateMovement();
+	void	UpdatePlayers(Protocol::S_MOVE& pkt);
+	void	UpdateMonsters(Protocol::S_MOVE& pkt);
 	bool	ApplyInput(const PlayerRef& player);
 	void	MovePlayer(const PlayerRef& player);
 	void	RejectInput(PlayerRef player, uint32 seq, const char* reason);

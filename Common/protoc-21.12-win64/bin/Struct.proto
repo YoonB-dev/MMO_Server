@@ -22,6 +22,7 @@ message MoveInfo
 	float dir_z = 3;
 	float vel_y = 4;		// 세로 속도 (점프용, 지금은 항상 0)
 	MoveState state = 5;
+	float speed = 6;		// 수평 속도 (m/s, 멈춰 있으면 0). 클라는 (dir_x, dir_z) * speed로 다음 패킷까지 위치를 예측
 }
 
 // 월드에 존재하는 객체 하나 (플레이어, 몬스터 공통)
