@@ -1,5 +1,7 @@
 ﻿#include "pch.h"
 #include "Monster.h"
+#include "Room.h"
+#include "Player.h"
 #include <cmath>
 #include <random>
 
@@ -18,6 +20,7 @@ static const char* ToString(MonsterState state)
 	{
 	case MonsterState::Idle:	return "Idle";
 	case MonsterState::Patrol:	return "Patrol";
+	case MonsterState::Chase:	return "Chase";
 	}
 	return "?";
 }
@@ -29,30 +32,75 @@ Monster::Monster(float x, float z)
 	GetPosInfo()->set_z(z);
 }
 
-bool Monster::Update(float dt)
+bool Monster::Update(Room& room, float dt)
 {
 	const Protocol::MoveState before = GetMoveInfo()->state();
 
 	switch (_state)
 	{
-	case MonsterState::Idle:	UpdateIdle(dt);		break;
-	case MonsterState::Patrol:	UpdatePatrol(dt);	break;
+	case MonsterState::Idle:	UpdateIdle(room, dt);	break;
+	case MonsterState::Patrol:	UpdatePatrol(room, dt);	break;
+	case MonsterState::Chase:	UpdateChase(room, dt);	break;
 	}
 
 	return GetMoveInfo()->state() != before;
 }
 
-void Monster::UpdateIdle(float dt)
+void Monster::UpdateIdle(Room& room, float dt)
 {
+	if (TryDetect(room))
+		return;
+
 	_idleTime -= dt;
 	if (_idleTime <= 0.f)
 		SetState(MonsterState::Patrol);
 }
 
-void Monster::UpdatePatrol(float dt)
+void Monster::UpdatePatrol(Room& room, float dt)
 {
+	if (TryDetect(room))
+		return;
+
 	if (MoveTowards(_destX, _destZ, PATROL_SPEED, dt))
 		SetState(MonsterState::Idle);
+}
+
+void Monster::UpdateChase(Room& room, float dt)
+{
+	PlayerRef target = room.FindPlayer(_targetId);
+	if (target == nullptr)	// 타겟이 방을 나감
+	{
+		StopMove();
+		SetState(MonsterState::Idle);
+		return;
+	}
+
+	const Protocol::PosInfo* targetPos = target->GetPosInfo();
+	const Protocol::PosInfo* pos = GetPosInfo();
+	const float dx = targetPos->x() - pos->x();
+	const float dz = targetPos->z() - pos->z();
+
+	// 충분히 붙었으면 그 자리에서 기다림 (타겟이 멀어지면 다음 틱에 다시 쫓음)
+	if (dx * dx + dz * dz <= STOP_RANGE * STOP_RANGE)
+	{
+		StopMove();
+		return;
+	}
+
+	MoveTowards(targetPos->x(), targetPos->z(), CHASE_SPEED, dt);
+}
+
+// Idle/Patrol 공통: 감지 거리 안의 가장 가까운 플레이어를 타겟으로 Chase 시작. 찾았으면 true
+bool Monster::TryDetect(Room& room)
+{
+	const Protocol::PosInfo* pos = GetPosInfo();
+	PlayerRef player = room.FindNearestPlayer(pos->x(), pos->z(), DETECT_RANGE);
+	if (player == nullptr)
+		return false;
+
+	_targetId = player->GetObjectId();
+	SetState(MonsterState::Chase);
+	return true;
 }
 
 // 상태를 바꾸고, 새 상태를 시작할 때 할 일(대기 시간, 목적지 정하기)을 여기 한 곳에서 처리
@@ -70,11 +118,14 @@ void Monster::SetState(MonsterState next)
 		_destX = _spawnX + RandomRange(-PATROL_RANGE, PATROL_RANGE);
 		_destZ = _spawnZ + RandomRange(-PATROL_RANGE, PATROL_RANGE);
 		break;
+	case MonsterState::Chase:
+		break;	// 타겟(_targetId)은 TryDetect가 정해 둠
 	}
 
 	Protocol::PosInfo* pos = GetPosInfo();
 	cout << "[Monster " << GetObjectId() << "] " << ToString(prev) << " -> " << ToString(next)
-		<< " at (" << pos->x() << ", " << pos->z() << ")" << endl;
+		<< " at (" << pos->x() << ", " << pos->z() << ")"
+		<< (next == MonsterState::Chase ? " target " + to_string(_targetId) : "") << endl;
 }
 
 // (x, z)를 향해 speed로 한 틱만큼 이동. 이번 틱에 도착하면 그 자리에 멈추고 true
@@ -93,10 +144,7 @@ bool Monster::MoveTowards(float x, float z, float speed, float dt)
 	{
 		pos->set_x(x);
 		pos->set_z(z);
-		moveInfo->set_dir_x(0.f);
-		moveInfo->set_dir_z(0.f);
-		moveInfo->set_speed(0.f);
-		moveInfo->set_state(Protocol::MOVE_STATE_IDLE);
+		StopMove();
 		return true;
 	}
 
@@ -111,4 +159,13 @@ bool Monster::MoveTowards(float x, float z, float speed, float dt)
 	pos->set_x(pos->x() + dirX * step);
 	pos->set_z(pos->z() + dirZ * step);
 	return false;
+}
+
+void Monster::StopMove()
+{
+	Protocol::MoveInfo* moveInfo = GetMoveInfo();
+	moveInfo->set_dir_x(0.f);
+	moveInfo->set_dir_z(0.f);
+	moveInfo->set_speed(0.f);
+	moveInfo->set_state(Protocol::MOVE_STATE_IDLE);
 }

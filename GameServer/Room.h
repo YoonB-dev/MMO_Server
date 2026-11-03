@@ -28,6 +28,10 @@ public:
 	void	Leave(uint64 objectId);
 	void	HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 buttons, uint32 seq);
 
+	// 몬스터 AI가 쓰는 조회 (Room JobQueue 안, 틱 도중에만 호출)
+	PlayerRef	FindPlayer(uint64 objectId);
+	PlayerRef	FindNearestPlayer(float x, float z, float range);
+
 private:
 	void	SpawnMonsters();
 	void	Tick();

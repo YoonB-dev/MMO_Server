@@ -20,6 +20,14 @@ public:
 	uint64	moveStartTick = 0;		// --move-test: 내가 처음 MOVING으로 찍힌 server_tick
 	bool	moveStopSent = false;	// --move-test: 멈춤 입력을 보냈는지
 	set<uint64>	monsterIds;			// S_SPAWN으로 받은 몬스터 id (S_MOVE에서 플레이어/몬스터 항목 구분용)
+	float	myX = 0.f;				// 내 캐릭터의 마지막으로 받은 위치 (S_ENTER_GAME, 내 S_MOVE 항목)
+	float	myZ = 0.f;
+	uint64	chaseTargetId = 0;		// --chase-test: 쫓아갈 몬스터 id (0 = 아직 안 고름)
+	float	chaseTargetX = 0.f;		// --chase-test: 그 몬스터의 마지막으로 받은 위치
+	float	chaseTargetZ = 0.f;
+	uint32	chaseSeq = 0;			// --chase-test: 보낸 이동 입력 번호
+	bool	chaseStopSent = false;	// --chase-test: 5m 안에 들어와서 멈춤 입력을 보냈는지
+	bool	chaseDone = false;		// --chase-test: 결과를 출력했는지
 
 private:
 	int32 _clientId = 0;	// 이 프로세스 안에서 1, 2, 3 ... (로그 구분용)
@@ -29,6 +37,7 @@ private:
 extern bool GInputTest;	// --input-test: 입장하면 검증용 입력 묶음을 한 번 보냄
 extern bool GMoveTest;	// --move-test: 입장하면 오른쪽으로 약 1초 이동 후 멈추고 결과 판정
 extern bool GMonsterLog;	// --monster-log: S_MOVE의 몬스터 항목을 한 줄씩 출력
+extern bool GChaseTest;	// --chase-test: 가장 가까운 몬스터 쪽으로 걸어가서, 몬스터가 쫓아와 멈추는지 판정
 
 int64 NowUs();
 

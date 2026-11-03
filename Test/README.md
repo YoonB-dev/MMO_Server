@@ -37,6 +37,7 @@ powershell -ExecutionPolicy Bypass -File .\Test\Run-Test.ps1 -All
 | `MoveInputValidation` | 이상한 이동 입력(NaN, 중복 seq, 초당 30개 초과)을 서버가 버리는지 |
 | `Move` | 오른쪽 약 1초 이동 후 멈춤: 위치 약 5m, yaw 90, ack 2. 다른 클라도 S_MOVE 수신 |
 | `MonsterPatrol` | 몬스터가 Idle <-> Patrol 반복, 클라가 이동(speed 2)/멈춤(speed 0) S_MOVE 수신 |
+| `MonsterChase` | 몬스터 쪽으로 걸어가 5m 안에서 멈추면, 몬스터가 Chase로 바뀌어 다가와서 1.5m 앞에 멈춤 |
 
 ## 시나리오 추가
 
@@ -71,7 +72,7 @@ Assert-ServerAlive
 ### DummyClient 옵션
 
 ```
-DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--monster-log]
+DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--monster-log] [--chase-test]
 ```
 
 | 옵션 | 기본값 | 설명 |
@@ -80,6 +81,7 @@ DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--monste
 | `--ip`, `--port` | 127.0.0.1, 7777 | 서버 주소 |
 | `--no-ping` | ping 사용 | 1초마다 C_PING 보내기 끄기 |
 | `--monster-log` | 끔 | S_MOVE의 몬스터 항목을 `MONSTER_MOVE ...` 한 줄씩 출력 |
+| `--chase-test` | 끔 | 가장 가까운 몬스터 쪽으로 걸어가 5m 안에서 멈추고, 몬스터가 다가와 멈추면 `CHASE_TEST ok/fail` |
 
 로그 형식은 `[Client <번호>] <내용>`이고, 한 줄씩 통째로 출력돼서 여러 세션이 동시에 찍어도 섞이지 않는다.
 새 동작(예: 이동)을 테스트하려면 DummyClient에 옵션을 추가하고 `-Arguments`로 넘긴다.

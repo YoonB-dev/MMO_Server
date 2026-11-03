@@ -54,7 +54,8 @@ void Room::Tick()
 	if (_tick % TICKS_PER_SECOND == 0)
 		ResetInputCounts();
 
-	// 이번 틱에 바뀐 이동을 한 패킷에 모아서 전체(본인 포함)에 전송. 플레이어 먼저 -> 몬스터
+	// 이번 틱에 바뀐 이동을 한 패킷에 모아서 전체(본인 포함)에 전송
+	//   플레이어 먼저 -> 몬스터는 이번 틱에 움직인 플레이어 위치를 보고 판단
 	Protocol::S_MOVE pkt;
 	pkt.set_server_tick(_tick);
 	UpdatePlayers(pkt);
@@ -164,6 +165,33 @@ void Room::HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 butt
 	player->hasNewInput = true;
 }
 
+PlayerRef Room::FindPlayer(uint64 objectId)
+{
+	auto it = _players.find(objectId);
+	return (it != _players.end()) ? it->second : nullptr;
+}
+
+// (x, z)에서 range 안에 있는 가장 가까운 플레이어. 없으면 nullptr
+PlayerRef Room::FindNearestPlayer(float x, float z, float range)
+{
+	PlayerRef nearest = nullptr;
+	float nearestDistSq = range * range;	// 이보다 가까워야 후보 -> 범위 밖은 자연히 빠짐
+
+	for (auto& [id, player] : _players)
+	{
+		const Protocol::PosInfo* pos = player->GetPosInfo();
+		const float dx = pos->x() - x;
+		const float dz = pos->z() - z;
+		const float distSq = dx * dx + dz * dz;
+		if (distSq <= nearestDistSq)
+		{
+			nearest = player;
+			nearestDistSq = distSq;
+		}
+	}
+	return nearest;
+}
+
 void Room::ResetInputCounts()
 {
 	for (auto& [id, player] : _players)
@@ -197,7 +225,7 @@ void Room::UpdateMonsters(Protocol::S_MOVE& pkt)
 
 	for (auto& [id, monster] : _monsters)
 	{
-		const bool changed = monster->Update(TICK_DT);
+		const bool changed = monster->Update(*this, TICK_DT);
 
 		// 플레이어와 같은 규칙: 출발/멈춤은 바로, 움직이는 중이면 4틱마다
 		const bool moving = (monster->GetMoveInfo()->state() == Protocol::MOVE_STATE_MOVING);

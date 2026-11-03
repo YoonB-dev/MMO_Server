@@ -61,13 +61,88 @@ bool Handle_S_ENTER_GAME(PacketSessionRef& session, Protocol::S_ENTER_GAME& pkt)
 	line << "S_ENTER_GAME success=" << pkt.success() << " myId=" << pkt.player().object_id();
 	Log(ClientIdOf(session), line.str());
 
-	static_pointer_cast<ServerSession>(session)->myId = pkt.player().object_id();
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+	me->myId = pkt.player().object_id();
+	me->myX = pkt.player().move_info().pos_info().x();
+	me->myZ = pkt.player().move_info().pos_info().z();
 
 	if (GInputTest)
 		SendInputTestBurst(session);
 	if (GMoveTest)
 		SendMoveInput(session, 100.f, 0.f, 1);	// 오른쪽. 길이 100 -> 서버가 1로 줄여야 정상 속도
 	return true;
+}
+
+// 몬스터 추적 확인용 (Test/Scenarios/MonsterChase.ps1)
+//   S_SPAWN 몬스터 중 가장 가까운 것 쪽으로 걷기 -> 5m 안이면 멈춤 -> 몬스터가 다가와 멈추면 거리 판정
+//   서버는 1.5m(STOP_RANGE)에서 멈추고, 내 위치/몬스터 위치 모두 패킷 기준이라 여유를 두고 2m 이하면 ok
+static void AimAtChaseTarget(PacketSessionRef& session)
+{
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+	SendMoveInput(session, me->chaseTargetX - me->myX, me->chaseTargetZ - me->myZ, ++me->chaseSeq);	// 길이는 서버가 1로 줄임
+}
+
+static void StartChaseTest(PacketSessionRef& session, const Protocol::S_SPAWN& pkt)
+{
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+
+	float bestDistSq = (numeric_limits<float>::max)();	// 괄호: Windows.h의 max 매크로로 바뀌지 않게
+	for (const Protocol::ObjectInfo& object : pkt.objects())
+	{
+		if (object.object_type() != Protocol::OBJECT_TYPE_MONSTER)
+			continue;
+
+		const Protocol::PosInfo& pos = object.move_info().pos_info();
+		const float dx = pos.x() - me->myX;
+		const float dz = pos.z() - me->myZ;
+		const float distSq = dx * dx + dz * dz;
+		if (distSq < bestDistSq)
+		{
+			bestDistSq = distSq;
+			me->chaseTargetId = object.object_id();
+			me->chaseTargetX = pos.x();
+			me->chaseTargetZ = pos.z();
+		}
+	}
+
+	if (me->chaseTargetId != 0)
+		AimAtChaseTarget(session);
+}
+
+static void UpdateChaseTest(PacketSessionRef& session, const Protocol::MoveEntry& entry)
+{
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+	const Protocol::MoveInfo& move = entry.move_info();
+	me->chaseTargetX = move.pos_info().x();
+	me->chaseTargetZ = move.pos_info().z();
+
+	const float dx = me->chaseTargetX - me->myX;
+	const float dz = me->chaseTargetZ - me->myZ;
+	const float dist = std::sqrt(dx * dx + dz * dz);
+
+	// 걸어가는 중: 5m 안이면 멈춤, 아니면 몬스터가 움직였을 수 있으니 다시 조준
+	if (me->chaseStopSent == false)
+	{
+		if (dist <= 5.f)
+		{
+			SendMoveInput(session, 0.f, 0.f, ++me->chaseSeq);
+			me->chaseStopSent = true;
+		}
+		else
+		{
+			AimAtChaseTarget(session);
+		}
+		return;
+	}
+
+	// 멈춘 뒤: 몬스터가 다가와서 멈추면(IDLE) 판정
+	if (me->chaseDone == false && move.state() == Protocol::MOVE_STATE_IDLE)
+	{
+		ostringstream line;
+		line << "CHASE_TEST " << (dist <= 2.f ? "ok" : "fail") << " target=" << entry.object_id() << " dist=" << dist;
+		Log(me->GetClientId(), line.str());
+		me->chaseDone = true;
+	}
 }
 
 bool Handle_S_SPAWN(PacketSessionRef& session, Protocol::S_SPAWN& pkt)
@@ -86,6 +161,9 @@ bool Handle_S_SPAWN(PacketSessionRef& session, Protocol::S_SPAWN& pkt)
 		}
 	}
 	Log(me->GetClientId(), line.str());
+
+	if (GChaseTest && me->chaseTargetId == 0)
+		StartChaseTest(session, pkt);
 	return true;
 }
 
@@ -153,11 +231,18 @@ bool Handle_S_MOVE(PacketSessionRef& session, Protocol::S_MOVE& pkt)
 					<< " state=" << move.state() << " speed=" << move.speed();
 				Log(me->GetClientId(), monsterLine.str());
 			}
+
+			if (GChaseTest && entry.object_id() == me->chaseTargetId)
+				UpdateChaseTest(session, entry);
 			continue;
 		}
 
 		if (entry.object_id() != me->myId)
 			continue;
+
+		// 플레이어 항목이 몬스터 항목보다 앞에 오므로(서버 UpdatePlayers -> UpdateMonsters), 추적 판정 전에 내 위치가 먼저 갱신됨
+		me->myX = move.pos_info().x();
+		me->myZ = move.pos_info().z();
 
 		ostringstream myLine;
 		myLine << "MY_MOVE tick=" << pkt.server_tick()
