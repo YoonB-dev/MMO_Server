@@ -15,6 +15,7 @@
 using GameSessionRef = std::shared_ptr<class GameSession>;
 using GameObjectRef = std::shared_ptr<class GameObject>;
 using PlayerRef = std::shared_ptr<class Player>;
+using MonsterRef = std::shared_ptr<class Monster>;
 using RoomRef = std::shared_ptr<class Room>;
 
 // 패킷 입/출력 수 (생성되는 ClientPacketHandler.h에서 증가시킴, 정의는 GameServer.cpp)

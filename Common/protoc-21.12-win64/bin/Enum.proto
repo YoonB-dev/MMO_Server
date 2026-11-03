@@ -9,3 +9,10 @@ enum ObjectType
 	OBJECT_TYPE_PLAYER = 1;
 	OBJECT_TYPE_MONSTER = 2;
 }
+
+enum MoveState
+{
+	MOVE_STATE_IDLE = 0;
+	MOVE_STATE_MOVING = 1;
+	MOVE_STATE_AIRBORNE = 2;	// 점프/낙하 중 (지금은 안 씀)
+}

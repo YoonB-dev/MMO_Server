@@ -33,6 +33,9 @@
     <ClCompile Include="GameObject.cpp">
       <Filter>Game</Filter>
     </ClCompile>
+    <ClCompile Include="Monster.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
     <ClCompile Include="Room.cpp">
       <Filter>Game</Filter>
     </ClCompile>
@@ -40,6 +43,9 @@
       <Filter>Session</Filter>
     </ClCompile>
     <ClCompile Include="ClientPacketHandler.cpp">
+      <Filter>Packet</Filter>
+    </ClCompile>
+    <ClCompile Include="MoveSendPolicy.cpp">
       <Filter>Packet</Filter>
     </ClCompile>
     <ClCompile Include="Enum.pb.cc">
@@ -65,6 +71,9 @@
     <ClInclude Include="Player.h">
       <Filter>Game</Filter>
     </ClInclude>
+    <ClInclude Include="Monster.h">
+      <Filter>Game</Filter>
+    </ClInclude>
     <ClInclude Include="Room.h">
       <Filter>Game</Filter>
     </ClInclude>
@@ -73,6 +82,9 @@
     </ClInclude>
     <ClInclude Include="ClientPacketHandler.h">
       <Filter>Packet\Generated</Filter>
+    </ClInclude>
+    <ClInclude Include="MoveSendPolicy.h">
+      <Filter>Packet</Filter>
     </ClInclude>
     <ClInclude Include="Enum.pb.h">
       <Filter>Packet\Generated</Filter>
