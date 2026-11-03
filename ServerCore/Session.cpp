@@ -132,7 +132,6 @@ bool Session::RegisterConnect()
 
 bool Session::RegisterDisConnect()
 {
-	cout << "123123123" << endl;
 	_disConnectEvent.Init();
 	_disConnectEvent.eventType = EventType::DisConnect;
 	_disConnectEvent.owner = shared_from_this(); // ADD_REF
