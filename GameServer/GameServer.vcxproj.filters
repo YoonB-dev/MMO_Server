@@ -65,6 +65,9 @@
     <ClInclude Include="Player.h">
       <Filter>Game</Filter>
     </ClInclude>
+    <ClInclude Include="Monster.h">
+      <Filter>Game</Filter>
+    </ClInclude>
     <ClInclude Include="Room.h">
       <Filter>Game</Filter>
     </ClInclude>

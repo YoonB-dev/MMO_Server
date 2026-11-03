@@ -75,7 +75,11 @@ bool Handle_S_SPAWN(PacketSessionRef& session, Protocol::S_SPAWN& pkt)
 	ostringstream line;
 	line << "S_SPAWN ids:";
 	for (const Protocol::ObjectInfo& object : pkt.objects())
+	{
 		line << " " << object.object_id();
+		if (object.object_type() == Protocol::OBJECT_TYPE_MONSTER)
+			line << "(monster)";
+	}
 	Log(ClientIdOf(session), line.str());
 	return true;
 }

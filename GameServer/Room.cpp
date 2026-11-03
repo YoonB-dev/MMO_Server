@@ -1,6 +1,7 @@
 ﻿#include "pch.h"
 #include "Room.h"
 #include "Player.h"
+#include "Monster.h"
 #include "GameSession.h"
 #include "ClientPacketHandler.h"
 #include <cmath>
@@ -9,12 +10,41 @@
 // main에서 생성 (전역 변수 초기화 시점에는 ServerCore의 GMemory가 아직 없을 수 있음)
 RoomRef GRoom;
 
+// 몬스터 스폰 위치. 지금은 3마리 고정, 나중에 데이터 파일로 뺀다
+//   플레이어 입장 위치 (0, 0)에서 15m 넘게 떨어뜨림 -> 들어오자마자 쫓기지 않게
+struct SpawnPoint
+{
+	float x;
+	float z;
+};
+
+static constexpr SpawnPoint MONSTER_SPAWNS[] =
+{
+	{ 15.f, 15.f },
+	{ -20.f, 10.f },
+	{ 0.f, -25.f },
+};
+
 void Room::Start()
 {
+	SpawnMonsters();	// 서버가 열리기 전(main 스레드만 실행 중)이라 바로 호출해도 안전
+
 	const uint64 now = ::GetTickCount64();
 	_nextTickTime = now + TICK_INTERVAL_MS;
 	_logStartTime = now;
 	DoTimer(TICK_INTERVAL_MS, &Room::Tick);
+}
+
+void Room::SpawnMonsters()
+{
+	for (const SpawnPoint& spawn : MONSTER_SPAWNS)
+	{
+		MonsterRef monster = MakeShared<Monster>(spawn.x, spawn.z);
+		_monsters[monster->GetObjectId()] = monster;
+
+		cout << "[Room] spawn monster " << monster->GetObjectId()
+			<< " at (" << spawn.x << ", " << spawn.z << ")" << endl;
+	}
 }
 
 void Room::Tick()
@@ -57,7 +87,7 @@ void Room::Enter(PlayerRef player)
 		SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
 	}
 
-	// 2. 나에게: 이미 방에 있던 사람들
+	// 2. 나에게: 이미 방에 있던 객체들 (다른 플레이어 + 몬스터)
 	{
 		Protocol::S_SPAWN pkt;
 		for (auto& [id, other] : _players)
@@ -65,6 +95,9 @@ void Room::Enter(PlayerRef player)
 			if (id != myId)
 				*pkt.add_objects() = other->GetObjectInfo();
 		}
+
+		for (auto& [id, monster] : _monsters)
+			*pkt.add_objects() = monster->GetObjectInfo();
 
 		if (pkt.objects_size() > 0)
 			SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));

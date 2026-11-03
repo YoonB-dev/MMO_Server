@@ -27,6 +27,7 @@ public:
 	void	HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 buttons, uint32 seq);
 
 private:
+	void	SpawnMonsters();
 	void	Tick();
 	void	ResetInputCounts();
 	void	UpdateMovement();
@@ -38,6 +39,7 @@ private:
 
 private:
 	xunordered_map<uint64, PlayerRef>	_players;	// JobQueue 안에서만 접근 -> 락 없음
+	xunordered_map<uint64, MonsterRef>	_monsters;	// 위와 같음 (Start에서 채움)
 
 	uint64	_tick = 0;				// 서버 틱 번호 (S_MOVE의 server_tick)
 	uint64	_nextTickTime = 0;		// 다음 틱 목표 시각 (GetTickCount64 기준, ms)
