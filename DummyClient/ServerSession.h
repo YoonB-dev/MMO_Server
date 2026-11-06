@@ -30,6 +30,8 @@ public:
 	bool	chaseDone = false;		// --chase-test: 결과를 출력했는지
 	bool	turnStrafeSent = false;	// --turn-test: 옆으로 피하는 입력을 보냈는지
 	int32	lastTargetState = 0;	// --turn-test: 타겟 몬스터의 직전 항목 MoveState (MOVING -> MOVING 구분용)
+	bool	attackBurstSent = false;	// --attack-test: 검증용 공격 묶음을 보냈는지 (이후 S_PING마다 자동 공격)
+	int64	lastSkillUs = 0;		// --attack-test: 마지막으로 내 스킬이 확정된(S_SKILL) 시각. 클라 쪽 쿨타임 계산용
 
 private:
 	int32 _clientId = 0;	// 이 프로세스 안에서 1, 2, 3 ... (로그 구분용)
@@ -42,6 +44,7 @@ extern bool GMonsterLog;	// --monster-log: S_MOVE의 몬스터 항목을 한 줄
 extern bool GChaseTest;	// --chase-test: 가장 가까운 몬스터 쪽으로 걸어가서, 몬스터가 쫓아와 멈추는지 판정
 extern bool GTurnTest;	// --turn-test: chase-test 후 옆으로 피하면서, 몬스터 방향이 꺾일 때 바로 오는 S_MOVE 확인
 extern bool GFleeTest;	// --flee-test: chase-test 후 몬스터 반대 방향으로 도망 (몬스터 복귀 확인용)
+extern bool GAttackTest;	// --attack-test: chase-test 후 앞에 멈춘 몬스터를 공격 (검증용 묶음 + 1초마다 기본 공격)
 
 int64 NowUs();
 

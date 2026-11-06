@@ -33,6 +33,8 @@ Monster::Monster(const MonsterData& data, float x, float z)
 {
 	GetPosInfo()->set_x(x);
 	GetPosInfo()->set_z(z);
+	GetStatInfo()->set_hp(_data.maxHp);		// DB(data_monster.max_hp)
+	GetStatInfo()->set_max_hp(_data.maxHp);
 }
 
 void Monster::Update(Room& room, float dt)

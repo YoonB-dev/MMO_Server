@@ -5,7 +5,7 @@
 #include "ServerPacketHandler.h"
 
 // 접속 확인용 더미 클라이언트: N명이 접속해서 게임에 입장하고, 1초마다 C_PING -> S_PING 왕복 시간 출력
-//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--input-test] [--move-test] [--monster-log] [--chase-test] [--turn-test] [--flee-test]
+//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--input-test] [--move-test] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test]
 //   인자 없이 실행하면 3명, 127.0.0.1:7777, ping 사용 (Test/Run-Test.ps1에서 옵션을 넘겨서 사용)
 static const int32 IOCP_THREAD_COUNT = 2;
 
@@ -21,6 +21,7 @@ struct ClientOptions
 	bool	chaseTest = false;	// 가장 가까운 몬스터 쪽으로 걸어가서 추적 판정
 	bool	turnTest = false;	// chaseTest 후 옆으로 피하면서 꺾임 전송 확인
 	bool	fleeTest = false;	// chaseTest 후 반대 방향으로 도망 (몬스터 복귀 확인)
+	bool	attackTest = false;	// chaseTest 후 앞에 멈춘 몬스터 공격 (ping이 켜져 있어야 1초마다 공격)
 };
 
 ClientOptions ParseOptions(int argc, char* argv[])
@@ -56,6 +57,8 @@ ClientOptions ParseOptions(int argc, char* argv[])
 			options.turnTest = true;
 		else if (arg == "--flee-test")
 			options.fleeTest = true;
+		else if (arg == "--attack-test")
+			options.attackTest = true;
 		else
 			Log("[Client] Unknown option: " + arg);
 	}
@@ -71,9 +74,10 @@ int main(int argc, char* argv[])
 	GInputTest = options.inputTest;
 	GMoveTest = options.moveTest;
 	GMonsterLog = options.monsterLog;
-	GChaseTest = options.chaseTest || options.turnTest || options.fleeTest;	// turn/flee-test는 chase-test 과정을 먼저 거침
+	GChaseTest = options.chaseTest || options.turnTest || options.fleeTest || options.attackTest;	// turn/flee/attack-test는 chase-test 과정을 먼저 거침
 	GTurnTest = options.turnTest;
 	GFleeTest = options.fleeTest;
+	GAttackTest = options.attackTest;
 
 	this_thread::sleep_for(1s); // 같이 실행할 때 서버가 먼저 열리도록 잠깐 대기
 	ServerPacketHandler::Init();

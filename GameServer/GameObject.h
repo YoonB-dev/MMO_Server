@@ -12,7 +12,8 @@ public:
 	Protocol::ObjectInfo&	GetObjectInfo() { return _objectInfo; }
 	Protocol::MoveInfo*		GetMoveInfo() { return _objectInfo.mutable_move_info(); }
 	Protocol::PosInfo*		GetPosInfo() { return GetMoveInfo()->mutable_pos_info(); }
+	Protocol::StatInfo*		GetStatInfo() { return _objectInfo.mutable_stat_info(); }
 
 private:
-	Protocol::ObjectInfo	_objectInfo;	// id, 타입, 이동 정보(MoveInfo)를 합성으로 보관 -> 패킷에 그대로 복사해서 보냄
+	Protocol::ObjectInfo	_objectInfo;	// id, 타입, 이동 정보(MoveInfo), 스탯(StatInfo)을 합성으로 보관 -> 패킷에 그대로 복사해서 보냄
 };

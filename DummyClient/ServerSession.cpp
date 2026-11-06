@@ -8,6 +8,7 @@ bool GMonsterLog = false;
 bool GChaseTest = false;
 bool GTurnTest = false;
 bool GFleeTest = false;
+bool GAttackTest = false;
 
 int64 NowUs()
 {

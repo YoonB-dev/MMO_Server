@@ -57,3 +57,29 @@ message S_MOVE
 	uint64 server_tick = 1;
 	repeated MoveEntry moves = 2;
 }
+
+// ==================== 전투 ====================
+// 클라 -> 서버: 스킬 사용 요청. 기본 공격도 스킬 1번으로 취급
+//   타겟은 클라가 고름 (하이라이트한 몬스터). 서버는 믿지 않고 자기 데이터로 다시 검사
+message C_SKILL
+{
+	int32 skill_id = 1;		// 1 = 기본 공격 (Database/Data/skill.sql의 data_skill)
+	uint64 target_id = 2;	// 공격할 몬스터 id
+}
+
+// 서버 -> 클라(전체): 스킬 사용 확정 -> 공격 모션 재생, 시전자 본인은 쿨타임 UI 시작
+message S_SKILL
+{
+	uint64 object_id = 1;	// 시전자
+	int32 skill_id = 2;
+	uint64 target_id = 3;	// 클라는 시전자를 이 대상 쪽으로 돌려서 재생
+}
+
+// 서버 -> 클라(전체): HP가 바뀜 -> 데미지 숫자, HP바
+message S_CHANGE_HP
+{
+	uint64 object_id = 1;	// 맞은 객체
+	int32 hp = 2;			// 바뀐 뒤 HP
+	int32 damage = 3;		// 이번에 깎인 양 (표시용)
+	uint64 attacker_id = 4;	// 때린 객체 (내가 때린 건지 구분용)
+}

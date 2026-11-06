@@ -94,10 +94,19 @@ void Room::LogStats(uint64 now)
 		<< ", work avg " << workAvgMs << "ms max " << workMaxMs << "ms"
 		<< ", monster moves " << _monsterMovesSent << " (" << _monsterSendPolicy->Name() << ")" << endl;
 
+	// 스킬 거절: 이 구간에 하나라도 있었을 때만 출력 (정상 플레이에서는 거의 0)
+	const SkillRejectStats& r = _skillRejects;
+	if (r.unknownSkill + r.cooldown + r.badTarget + r.outOfRange > 0)
+	{
+		cout << "[Room] skill rejects: unknown-skill " << r.unknownSkill << ", cooldown " << r.cooldown
+			<< ", bad-target " << r.badTarget << ", out-of-range " << r.outOfRange << endl;
+	}
+
 	_logStartTime = now;
 	_workTimeSumUs = 0;
 	_workTimeMaxUs = 0;
 	_monsterMovesSent = 0;
+	_skillRejects = {};	// 전부 0으로
 }
 
 void Room::Enter(PlayerRef player)
@@ -181,6 +190,74 @@ void Room::HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 butt
 	// 같은 틱 안에 또 오면 덮어씀 -> 틱은 마지막 입력 하나만 적용
 	player->lastInput = MoveInput{ dirX, dirZ, buttons, seq };
 	player->hasNewInput = true;
+}
+
+// C_SKILL 처리. 클라가 고른 타겟을 믿지 않고 서버 데이터로 다시 검사한 뒤 데미지
+void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
+{
+	// 요청이 줄에서 기다리는 사이 이미 Leave가 처리된 플레이어
+	if (_players.find(player->GetObjectId()) == _players.end())
+		return;
+
+	// 1. 표(data_skill)에 있는 스킬인가
+	const SkillData* skill = FindSkillData(skillId);
+	if (skill == nullptr)
+	{
+		_skillRejects.unknownSkill++;
+		return;
+	}
+
+	// 2. 쿨타임: 다시 쓸 수 있는 틱보다 이르면 거절 (1틱 여유)
+	//    readyTick - 1로 쓰지 않는 이유: readyTick이 0이면 uint64는 -1이 못 되고 아주 큰 수가 됨
+	//    [] 는 키가 없으면 0으로 칸을 만듦 -> 스킬 id 검사 뒤에 둬야 아무 id로나 칸이 생기지 않음
+	uint64& readyTick = player->skillReadyTick[skillId];
+	if (_tick + COOLDOWN_SLACK_TICKS < readyTick)
+	{
+		_skillRejects.cooldown++;
+		return;
+	}
+
+	// 3. 타겟: 지금 방에 있는 몬스터인가 (없는 id, 플레이어 id는 여기서 걸림)
+	auto it = _monsters.find(targetId);
+	if (it == _monsters.end())
+	{
+		_skillRejects.badTarget++;
+		return;
+	}
+	MonsterRef target = it->second;	// shared_ptr 복사 -> 이 함수가 끝날 때까지 몬스터가 살아 있음
+
+	// 4. 거리: 클라가 본 위치가 아니라 서버가 가진 위치로 잼 (+ 지연 여유)
+	Protocol::PosInfo* myPos = player->GetPosInfo();
+	const Protocol::PosInfo* targetPos = target->GetPosInfo();
+	const float dx = targetPos->x() - myPos->x();
+	const float dz = targetPos->z() - myPos->z();
+	const float maxRange = skill->range + SKILL_RANGE_SLACK;
+	if (dx * dx + dz * dz > maxRange * maxRange)	// 제곱끼리 비교 -> sqrt 안 씀
+	{
+		_skillRejects.outOfRange++;
+		return;
+	}
+
+	// ---- 여기부터 확정 ----
+	// ms -> 틱은 올림: 50ms 단위가 아니어도 설계값보다 짧아지지 않게 (500ms -> 10틱, 520ms -> 11틱)
+	const uint64 cooldownTicks = (static_cast<uint64>(skill->cooldownMs) + TICK_INTERVAL_MS - 1) / TICK_INTERVAL_MS;
+	readyTick = _tick + cooldownTicks;
+
+	// 멈춰 있을 때만 타겟 쪽으로 돌아봄
+	//   이동 중에 바꾸면 이후 S_MOVE에 '옆으로 달리면서 몸은 타겟을 보는' yaw가 실림 -> 이동 중엔 클라가 상체만 돌림
+	if (player->GetMoveInfo()->state() == Protocol::MOVE_STATE_IDLE)
+		myPos->set_yaw(std::atan2(dx, dz) * RAD_TO_DEG);
+
+	// 모두에게: 누가 누구에게 무슨 스킬을 썼다 (공격 모션)
+	{
+		Protocol::S_SKILL pkt;
+		pkt.set_object_id(player->GetObjectId());
+		pkt.set_skill_id(skillId);
+		pkt.set_target_id(targetId);
+		Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
+	}
+
+	ApplyDamage(*target, player->GetObjectId(), skill->damage);
 }
 
 PlayerRef Room::FindPlayer(uint64 objectId)
@@ -301,6 +378,23 @@ void Room::RejectInput(PlayerRef player, uint32 seq, const char* reason)
 {
 	cout << "[Room] reject input: player " << player->GetObjectId()
 		<< ", seq " << seq << ", reason " << reason << endl;
+}
+
+// target의 HP를 깎고 모두에게 알림. HP는 GameObject(ObjectInfo)에 있으므로 Monster가 아니라 GameObject로 받음
+void Room::ApplyDamage(GameObject& target, uint64 attackerId, int32 damage)
+{
+	Protocol::StatInfo* stat = target.GetStatInfo();
+	int32 hp = stat->hp() - damage;
+	if (hp < 0)
+		hp = 0;		// 1단계: 0에서 멈추기만 함 (죽음은 2단계). std::max는 Windows.h의 max 매크로와 부딪혀서 안 씀
+	stat->set_hp(hp);
+
+	Protocol::S_CHANGE_HP pkt;
+	pkt.set_object_id(target.GetObjectId());
+	pkt.set_hp(hp);
+	pkt.set_damage(damage);
+	pkt.set_attacker_id(attackerId);
+	Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
 }
 
 void Room::Broadcast(SendBufferRef sendBuffer, uint64 exceptId)

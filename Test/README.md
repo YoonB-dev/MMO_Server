@@ -32,7 +32,7 @@ powershell -ExecutionPolicy Bypass -File .\Test\Run-Test.ps1 -All
 
 | 이름 | 확인 내용 |
 |---|---|
-| `DbConnect` | 서버가 시작할 때 DB에 접속하고 확인 쿼리까지 성공 (`[DB] connected: mmo_db`), 몬스터 기획 데이터를 읽어서 3마리 스폰 |
+| `DbConnect` | 서버가 시작할 때 DB에 접속하고 확인 쿼리까지 성공 (`[DB] connected: mmo_db`), 기획 데이터(몬스터, 스킬)를 읽어서 3마리 스폰 |
 | `Ping` | 1명 접속, S_PING 왕복 |
 | `EnterLeave` | A 3명 + B 3명 입장, 스폰 수, B 종료 시 A가 디스폰 9개 수신 |
 | `ManyClients` | 100명 동시 입장, 한꺼번에 종료해도 서버 생존 |
@@ -43,6 +43,7 @@ powershell -ExecutionPolicy Bypass -File .\Test\Run-Test.ps1 -All
 | `MonsterTurnSend` | 위 추적 후 옆으로 피하면, 몬스터 방향이 10도 넘게 꺾일 때 4틱을 기다리지 않고 S_MOVE가 옴 (angle 정책) |
 | `MonsterReturn` | 위 추적 후 접속을 끊으면, 몬스터가 포기(left)하고 스폰으로 돌아가 Idle |
 | `MonsterLeash` | 위 추적 후 반대로 도망치면, 몬스터가 스폰에서 20m를 넘을 때 포기(leash)하고 speed 6으로 돌아가 Idle |
+| `MonsterAttack` | 위 추적 후 잘못된 공격 5개(없는 스킬, 없는 id, 플레이어 id, 먼 몬스터, 쿨타임) + 정상 1개 -> 정상만 통과(HP 200 -> 190), 서버 통계에 거절 이유별 횟수. 이후 1초마다 공격해서 170까지 |
 
 ## 시나리오 추가
 
@@ -77,7 +78,7 @@ Assert-ServerAlive
 ### DummyClient 옵션
 
 ```
-DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--monster-log] [--chase-test] [--turn-test] [--flee-test]
+DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test]
 ```
 
 | 옵션 | 기본값 | 설명 |
@@ -89,6 +90,7 @@ DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--monste
 | `--chase-test` | 끔 | 가장 가까운 몬스터 쪽으로 걸어가 5m 안에서 멈추고, 몬스터가 다가와 멈추면 `CHASE_TEST ok/fail` |
 | `--turn-test` | 끔 | `--chase-test` 후 옆으로 피하면서, 4틱 주기 밖에서 온 몬스터 이동마다 `TURN_SEND` |
 | `--flee-test` | 끔 | `--chase-test` 후 몬스터 반대 방향으로 계속 달림 (몬스터 복귀 확인용) |
+| `--attack-test` | 끔 | `--chase-test` 후 앞에 멈춘 몬스터에게 검증용 공격 묶음을 보내고, 이후 S_PING(1초)마다 기본 공격 (ping을 끄면 묶음만) |
 
 로그 형식은 `[Client <번호>] <내용>`이고, 한 줄씩 통째로 출력돼서 여러 세션이 동시에 찍어도 섞이지 않는다.
 새 동작(예: 이동)을 테스트하려면 DummyClient에 옵션을 추가하고 `-Arguments`로 넘긴다.

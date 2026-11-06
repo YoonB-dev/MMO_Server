@@ -7,6 +7,7 @@
 struct MonsterData
 {
 	int32	monsterId = 0;
+	int32	maxHp = 0;			// 스폰할 때 HP
 	float	patrolRange = 0.f;	// 스폰 기준 ±범위 안에서 배회
 	float	patrolSpeed = 0.f;
 	float	idleMinSec = 0.f;	// 배회 사이 대기 시간
@@ -28,6 +29,16 @@ struct MonsterSpawnData
 	float	z = 0.f;
 };
 
+// data_skill 한 줄: 스킬 하나의 고정 수치. 클라도 같은 skill_id 번호를 씀
+struct SkillData
+{
+	int32	skillId = 0;
+	int32	cooldownMs = 0;	// 다시 쓸 수 있을 때까지 (ms). Room이 틱 수로 바꿔서 씀
+	float	range = 0.f;	// 사거리 (m). 서버 위치 기준, Room이 지연 여유를 더해서 검사
+	int32	damage = 0;
+};
+
 bool							LoadGameData();						// main에서 DB 접속 후 한 번. 실패하면 이유를 찍고 false
 const MonsterData*				FindMonsterData(int32 monsterId);	// 없으면 nullptr
 const vector<MonsterSpawnData>&	GetMonsterSpawns();
+const SkillData*				FindSkillData(int32 skillId);		// 없으면 nullptr

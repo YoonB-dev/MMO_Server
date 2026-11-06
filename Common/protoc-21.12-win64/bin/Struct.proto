@@ -25,12 +25,20 @@ message MoveInfo
 	float speed = 6;		// 수평 속도 (m/s, 멈춰 있으면 0). 클라는 (dir_x, dir_z) * speed로 다음 패킷까지 위치를 예측
 }
 
+// 전투 스탯. 지금은 HP만 (MP는 원거리 스킬 단계에서 추가)
+message StatInfo
+{
+	int32 hp = 1;
+	int32 max_hp = 2;
+}
+
 // 월드에 존재하는 객체 하나 (플레이어, 몬스터 공통)
 message ObjectInfo
 {
 	uint64 object_id = 1;
 	ObjectType object_type = 2;
 	MoveInfo move_info = 3;
+	StatInfo stat_info = 4;		// HP바 표시용. S_ENTER_GAME, S_SPAWN에 자동으로 같이 실림
 }
 
 // S_MOVE 안의 한 명분

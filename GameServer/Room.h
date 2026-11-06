@@ -14,6 +14,7 @@ class Room : public JobQueue
 		TICK_LOG_INTERVAL = 200,	// 200틱(10초)마다 통계 로그 (틱 간격, 처리 시간, 몬스터 전송 수)
 		MAX_TICK_DELAY_MS = 1000,	// 이보다 밀리면 따라잡지 않고 기준 시각을 다시 잡음
 		MOVE_RESEND_TICKS = 4,		// 움직이는 중에는 4틱(200ms)마다 위치를 다시 보냄
+		COOLDOWN_SLACK_TICKS = 1,	// 쿨타임 여유. 틱이 몇 ms 늦게 돌아도 정상 클라가 거절되지 않게
 	};
 
 	static constexpr int32	MAX_INPUTS_PER_SECOND = 30;	// 정상 클라는 바뀔 때만 보내서 보통 10개 이하
@@ -22,6 +23,16 @@ class Room : public JobQueue
 	static constexpr float	TICK_DT = TICK_INTERVAL_MS / 1000.f;		// 한 틱 = 0.05초 (실제 간격과 관계없이 고정 -> 재현 가능)
 	static constexpr float	WORLD_HALF_SIZE = 100.f;					// 월드 200x200, 가운데가 (0, 0)
 	static constexpr float	RAD_TO_DEG = 57.2957795f;					// 라디안 -> 도 (180 / π)
+	static constexpr float	SKILL_RANGE_SLACK = 1.f;	// 사거리 여유 (m). 클라가 보는 위치는 지연만큼 다름 (몬스터 4m/s x 왕복 200ms = 0.8m)
+
+	// 스킬 요청을 거절한 횟수 (이유별). 한 줄씩 찍지 않고 세기만 함 -> 핵이 초당 수천 개를 보내도 로그가 넘치지 않음
+	struct SkillRejectStats
+	{
+		uint64	unknownSkill = 0;	// 표(data_skill)에 없는 skill_id
+		uint64	cooldown = 0;		// 쿨타임 중
+		uint64	badTarget = 0;		// 없는 id, 이미 없어진 몬스터, 플레이어 id
+		uint64	outOfRange = 0;		// 서버 위치 기준 사거리 + 여유 밖
+	};
 
 public:
 	void	SetMonsterSendPolicy(const MoveSendPolicy* policy);	// Start 전에 main에서 한 번
@@ -29,6 +40,7 @@ public:
 	void	Enter(PlayerRef player);
 	void	Leave(uint64 objectId);
 	void	HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 buttons, uint32 seq);
+	void	HandleSkill(PlayerRef player, int32 skillId, uint64 targetId);
 
 	// 몬스터 AI가 쓰는 조회 (Room JobQueue 안, 틱 도중에만 호출)
 	PlayerRef	FindPlayer(uint64 objectId);
@@ -44,6 +56,7 @@ private:
 	bool	ApplyInput(const PlayerRef& player);
 	void	MovePlayer(const PlayerRef& player);
 	void	RejectInput(PlayerRef player, uint32 seq, const char* reason);
+	void	ApplyDamage(GameObject& target, uint64 attackerId, int32 damage);
 	void	Broadcast(SendBufferRef sendBuffer, uint64 exceptId = 0);
 	void	SendTo(PlayerRef player, SendBufferRef sendBuffer);
 
@@ -61,6 +74,7 @@ private:
 	uint64	_workTimeSumUs = 0;		// 틱 처리 시간 합 (마이크로초)
 	uint64	_workTimeMaxUs = 0;		// 가장 오래 걸린 틱
 	uint64	_monsterMovesSent = 0;	// S_MOVE에 넣은 몬스터 항목 수
+	SkillRejectStats	_skillRejects;	// 스킬 요청 거절 이유별 횟수
 };
 
 extern RoomRef GRoom;
