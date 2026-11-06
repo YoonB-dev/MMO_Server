@@ -7,6 +7,7 @@
 #include "DBBind.h"
 #include "Room.h"
 #include "MoveSendPolicy.h"
+#include "GameData.h"
 
 std::atomic<int64> g_inboundPacketCount(0);
 std::atomic<int64> g_outboundPacketCount(0);
@@ -140,6 +141,11 @@ int main(int argc, char* argv[])
 		return -1;
 
 	if (USE_DATABASE && ConnectDatabase() == false)
+		return -1;
+
+	// 기획 데이터(몬스터 종류, 스폰)를 DB에서 읽음. Room::Start(몬스터 스폰)보다 먼저
+	//   USE_DATABASE가 false면 건너뜀 -> 몬스터 없이 네트워크만 동작
+	if (USE_DATABASE && LoadGameData() == false)
 		return -1;
 
 	ClientPacketHandler::Init();

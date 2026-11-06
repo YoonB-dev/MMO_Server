@@ -1,7 +1,9 @@
-﻿# config.ini [Database]의 Database(mmo_db)를 만든다. 이미 있으면 그대로 둠 -> 여러 번 실행해도 안전
-#   처음 한 번, 또는 DB를 지웠을 때:  .\Database\Setup-Database.ps1
+﻿# config.ini [Database]의 Database(mmo_db)를 준비한다. 여러 번 실행해도 안전
+#   1. DB가 없으면 만든다 (이미 있으면 그대로 둠)
+#   2. 기획 데이터 Data/*.sql을 이름 순서대로 다시 적용한다 (파일마다 테이블을 지우고 다시 만들고 값 넣기)
+#      -> 기획 데이터의 정답은 이 파일들. 값을 바꾸려면 DB가 아니라 파일을 고치고 이 스크립트를 다시 실행
+#   처음 한 번, 또는 Data/*.sql을 고쳤을 때:  .\Database\Setup-Database.ps1
 #   Test\Run-Test.ps1이 시나리오 전에 자동으로 호출한다
-#   테이블은 처음 생기는 단계(스킬 데이터)에서 SQL 파일과 적용 순서를 이 스크립트에 추가
 #   스크립트 실행이 막혀 있으면: powershell -ExecutionPolicy Bypass -File .\Database\Setup-Database.ps1
 param(
     [string]$ConfigPath = (Join-Path $PSScriptRoot '..\GameServer\config.ini')
@@ -29,6 +31,30 @@ function Read-DbConfig
         if (-not $db.ContainsKey($key)) { throw "config.ini [Database] is missing '$key'" }
     }
     return $db
+}
+
+# SQL 파일을 문장 단위로 나눠서 하나씩 실행 -> 틀린 문장이 몇 번째인지 알 수 있음
+#   규칙: 문장은 줄 끝의 ;로 끝남 (; 뒤에 주석 금지), 줄 전체 주석(--)은 건너뜀
+function Invoke-SqlFile
+{
+    param([System.Data.Odbc.OdbcConnection]$Connection, [string]$Path)
+
+    $lines = Get-Content $Path -Encoding UTF8 | Where-Object { -not $_.Trim().StartsWith('--') }
+    $statements = @(($lines -join "`n") -split ';[ \t]*(?:\n|$)' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+
+    $cmd = $Connection.CreateCommand()
+    for ($i = 0; $i -lt $statements.Count; $i++)
+    {
+        $cmd.CommandText = $statements[$i]
+        try { [void]$cmd.ExecuteNonQuery() }
+        catch
+        {
+            $reason = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
+            $firstLine = ($statements[$i] -split "`n")[0]
+            throw "$(Split-Path $Path -Leaf) statement $($i + 1) '$firstLine': $reason"
+        }
+    }
+    return $statements.Count
 }
 
 $conn = $null
@@ -63,6 +89,15 @@ try
         $cmd.CommandText = "CREATE DATABASE $name CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
         [void]$cmd.ExecuteNonQuery()
         Write-Host "Database '$name' created (utf8mb4)"
+    }
+
+    # 기획 데이터: Data/*.sql을 이름 순서대로 적용 (파일마다 지우고 다시 만들고 값 넣기)
+    $cmd.CommandText = "USE $name"
+    [void]$cmd.ExecuteNonQuery()
+    foreach ($file in Get-ChildItem (Join-Path $PSScriptRoot 'Data') -Filter '*.sql' | Sort-Object Name)
+    {
+        $count = Invoke-SqlFile -Connection $conn -Path $file.FullName
+        Write-Host "Applied Data/$($file.Name) ($count statements)"
     }
     $ok = $true
 }

@@ -1,5 +1,6 @@
 ﻿#include "pch.h"
 #include "Monster.h"
+#include "GameData.h"
 #include "Room.h"
 #include "Player.h"
 #include <cmath>
@@ -26,8 +27,9 @@ static const char* ToString(MonsterState state)
 	return "?";
 }
 
-Monster::Monster(float x, float z)
-	: GameObject(Protocol::OBJECT_TYPE_MONSTER), _spawnX(x), _spawnZ(z)
+// _data는 참조라서 나중에 대입할 수 없음 -> 초기화 리스트에서만 정할 수 있음 (멤버 선언 순서와 같은 순서로)
+Monster::Monster(const MonsterData& data, float x, float z)
+	: GameObject(Protocol::OBJECT_TYPE_MONSTER), _data(data), _spawnX(x), _spawnZ(z)
 {
 	GetPosInfo()->set_x(x);
 	GetPosInfo()->set_z(z);
@@ -59,7 +61,7 @@ void Monster::UpdatePatrol(Room& room, float dt)
 	if (TryDetect(room))
 		return;
 
-	if (MoveTowards(_destX, _destZ, PATROL_SPEED, dt))
+	if (MoveTowards(_destX, _destZ, _data.patrolSpeed, dt))
 		SetState(MonsterState::Idle);
 }
 
@@ -73,7 +75,7 @@ void Monster::UpdateChase(Room& room, float dt)
 	const Protocol::PosInfo* pos = GetPosInfo();
 	const float sx = pos->x() - _spawnX;
 	const float sz = pos->z() - _spawnZ;
-	if (sx * sx + sz * sz > LEASH_RANGE * LEASH_RANGE)
+	if (sx * sx + sz * sz > _data.leashRange * _data.leashRange)
 		return GiveUpChase("leash");
 
 	const Protocol::PosInfo* targetPos = target->GetPosInfo();
@@ -81,23 +83,23 @@ void Monster::UpdateChase(Room& room, float dt)
 	const float dz = targetPos->z() - pos->z();
 	const float distSq = dx * dx + dz * dz;
 
-	if (distSq > LOSE_RANGE * LOSE_RANGE)
+	if (distSq > _data.loseRange * _data.loseRange)
 		return GiveUpChase("lost");		// 타겟이 너무 멀어짐
 
 	// 충분히 붙었으면 그 자리에서 기다림 (타겟이 멀어지면 다음 틱에 다시 쫓음)
-	if (distSq <= STOP_RANGE * STOP_RANGE)
+	if (distSq <= _data.stopRange * _data.stopRange)
 	{
 		StopMove();
 		return;
 	}
 
-	MoveTowards(targetPos->x(), targetPos->z(), CHASE_SPEED, dt);
+	MoveTowards(targetPos->x(), targetPos->z(), _data.chaseSpeed, dt);
 }
 
 // 스폰으로 돌아감. 이 동안은 TryDetect를 안 해서 플레이어를 무시 (돌아가다 다시 붙는 것 방지)
 void Monster::UpdateReturn(float dt)
 {
-	if (MoveTowards(_spawnX, _spawnZ, RETURN_SPEED, dt))
+	if (MoveTowards(_spawnX, _spawnZ, _data.returnSpeed, dt))
 		SetState(MonsterState::Idle);	// 도착 -> 다시 Seek
 }
 
@@ -105,7 +107,7 @@ void Monster::UpdateReturn(float dt)
 bool Monster::TryDetect(Room& room)
 {
 	const Protocol::PosInfo* pos = GetPosInfo();
-	PlayerRef player = room.FindNearestPlayer(pos->x(), pos->z(), DETECT_RANGE);
+	PlayerRef player = room.FindNearestPlayer(pos->x(), pos->z(), _data.detectRange);
 	if (player == nullptr)
 		return false;
 
@@ -130,11 +132,11 @@ void Monster::SetState(MonsterState next)
 	switch (next)
 	{
 	case MonsterState::Idle:
-		_idleTime = RandomRange(IDLE_MIN_TIME, IDLE_MAX_TIME);
+		_idleTime = RandomRange(_data.idleMinSec, _data.idleMaxSec);
 		break;
 	case MonsterState::Patrol:
-		_destX = _spawnX + RandomRange(-PATROL_RANGE, PATROL_RANGE);
-		_destZ = _spawnZ + RandomRange(-PATROL_RANGE, PATROL_RANGE);
+		_destX = _spawnX + RandomRange(-_data.patrolRange, _data.patrolRange);
+		_destZ = _spawnZ + RandomRange(-_data.patrolRange, _data.patrolRange);
 		break;
 	case MonsterState::Chase:
 		break;	// 타겟(_targetId)은 TryDetect가 정해 둠

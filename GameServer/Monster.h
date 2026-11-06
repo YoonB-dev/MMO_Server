@@ -1,6 +1,8 @@
 ﻿#pragma once
 #include "GameObject.h"
 
+struct MonsterData;	// 참조로만 쓰니 선언만 (GameData.h 전체를 include하지 않음)
+
 // 몬스터 AI 상태 (서버 판단용. 클라에는 안 보내고, 클라는 MoveInfo의 IDLE/MOVING만 봄)
 enum class MonsterState
 {
@@ -13,20 +15,11 @@ enum class MonsterState
 // 몬스터 = 월드 객체 + AI. 세션 없이 Room 틱마다 서버가 직접 움직인다
 class Monster : public GameObject
 {
-	static constexpr float	PATROL_RANGE = 5.f;			// 스폰 기준 ±5m 사각형 안에서 배회
-	static constexpr float	PATROL_SPEED = 2.f;			// m/s (플레이어는 5)
-	static constexpr float	IDLE_MIN_TIME = 1.f;		// 배회 사이 대기 1~3초
-	static constexpr float	IDLE_MAX_TIME = 3.f;
-	static constexpr float	DETECT_RANGE = 8.f;			// 이 안에 플레이어가 들어오면 Chase
-	static constexpr float	STOP_RANGE = 1.5f;			// 타겟과 이만큼 가까우면 멈춤 (겹치지 않게)
-	static constexpr float	CHASE_SPEED = 4.f;			// m/s (플레이어 5보다 느리게 -> 도망칠 수 있음)
-	static constexpr float	LOSE_RANGE = 12.f;			// 타겟이 이보다 멀어지면 포기 (DETECT_RANGE보다 커야 경계에서 왔다 갔다 안 함)
-	static constexpr float	LEASH_RANGE = 20.f;			// 스폰에서 이보다 멀리 끌려오면 포기
-	static constexpr float	RETURN_SPEED = 6.f;			// m/s (플레이어 5보다 빠르게 복귀)
+	// AI 수치(배회 범위, 감지 거리, 속도 등)는 몬스터 종류마다 다르게 하려고 DB(data_monster)로 옮김 -> _data에서 읽음
 	static constexpr float	RAD_TO_DEG = 57.2957795f;	// Room.h와 같은 값
 
 public:
-	Monster(float x, float z);
+	Monster(const MonsterData& data, float x, float z);	// data: 이 몬스터 종류의 수치 (GameData가 들고 있는 원본)
 
 	// Room::Tick에서 매 틱 호출 (보낼지는 Room의 전송 정책이 lastSentMove와 비교해서 정함)
 	//   room: 플레이어를 찾을 때만 빌려 씀 (멤버로 들고 있지 않음)
@@ -48,6 +41,7 @@ private:
 	void	StopMove();
 
 private:
+	const MonsterData&	_data;		// 이 몬스터 종류의 수치 (GameData가 프로그램 끝까지 들고 있음, 시작 후 안 바뀜)
 	MonsterState	_state = MonsterState::Idle;
 	float			_spawnX;			// 배회 중심
 	float			_spawnZ;

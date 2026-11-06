@@ -5,27 +5,13 @@
 #include "GameSession.h"
 #include "ClientPacketHandler.h"
 #include "MoveSendPolicy.h"
+#include "GameData.h"
 #include <cmath>
 #include <algorithm>
 #include <chrono>
 
 // main에서 생성 (전역 변수 초기화 시점에는 ServerCore의 GMemory가 아직 없을 수 있음)
 RoomRef GRoom;
-
-// 몬스터 스폰 위치. 지금은 3마리 고정, 나중에 데이터 파일로 뺀다
-//   플레이어 입장 위치 (0, 0)에서 15m 넘게 떨어뜨림 -> 들어오자마자 쫓기지 않게
-struct SpawnPoint
-{
-	float x;
-	float z;
-};
-
-static constexpr SpawnPoint MONSTER_SPAWNS[] =
-{
-	{ 15.f, 15.f },
-	{ -20.f, 10.f },
-	{ 0.f, -25.f },
-};
 
 void Room::SetMonsterSendPolicy(const MoveSendPolicy* policy)
 {
@@ -43,14 +29,16 @@ void Room::Start()
 	DoTimer(TICK_INTERVAL_MS, &Room::Tick);
 }
 
+// 스폰 위치와 종류는 DB(data_monster_spawn)에서 읽어 둔 것 (main의 LoadGameData)
 void Room::SpawnMonsters()
 {
-	for (const SpawnPoint& spawn : MONSTER_SPAWNS)
+	for (const MonsterSpawnData& spawn : GetMonsterSpawns())
 	{
-		MonsterRef monster = MakeShared<Monster>(spawn.x, spawn.z);
+		const MonsterData* data = FindMonsterData(spawn.monsterId);	// LoadGameData가 검사해 둬서 항상 있음
+		MonsterRef monster = MakeShared<Monster>(*data, spawn.x, spawn.z);
 		_monsters[monster->GetObjectId()] = monster;
 
-		cout << "[Room] spawn monster " << monster->GetObjectId()
+		cout << "[Room] spawn monster " << monster->GetObjectId() << " (type " << spawn.monsterId << ")"
 			<< " at (" << spawn.x << ", " << spawn.z << ")" << endl;
 	}
 }

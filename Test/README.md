@@ -25,14 +25,14 @@ powershell -ExecutionPolicy Bypass -File .\Test\Run-Test.ps1 -All
 
 - 서버는 `GameServer/config.ini`의 IP/Port로 뜬다. 같은 포트로 이미 서버가 떠 있으면 시작 단계에서 실패한다.
 - 서버는 시작할 때 `config.ini`의 [Database]로 MySQL에 접속한다 (`GameServer.cpp`의 `USE_DATABASE`, 기본 true). MySQL 서비스가 켜져 있어야 한다.
-- `Run-Test.ps1`은 시나리오 전에 `Database/Setup-Database.ps1`을 불러서 DB가 없으면 만든다. 실패하면 시나리오를 돌리지 않는다.
+- `Run-Test.ps1`은 시나리오 전에 `Database/Setup-Database.ps1`을 불러서 DB가 없으면 만들고, 기획 데이터(`Database/Data/*.sql`)를 다시 적용한다. 실패하면 시나리오를 돌리지 않는다.
 - 실행 파일은 `Binary/<구성>/`에서 가져온다. 코드를 바꿨으면 `-Build`를 붙이거나 VS에서 먼저 빌드한다.
 
 ## 시나리오
 
 | 이름 | 확인 내용 |
 |---|---|
-| `DbConnect` | 서버가 시작할 때 DB에 접속하고 확인 쿼리까지 성공 (`[DB] connected: mmo_db`) |
+| `DbConnect` | 서버가 시작할 때 DB에 접속하고 확인 쿼리까지 성공 (`[DB] connected: mmo_db`), 몬스터 기획 데이터를 읽어서 3마리 스폰 |
 | `Ping` | 1명 접속, S_PING 왕복 |
 | `EnterLeave` | A 3명 + B 3명 입장, 스폰 수, B 종료 시 A가 디스폰 9개 수신 |
 | `ManyClients` | 100명 동시 입장, 한꺼번에 종료해도 서버 생존 |

@@ -92,6 +92,7 @@
     <ClCompile Include="GameSessionManager.cpp" />
     <ClCompile Include="GameObject.cpp" />
     <ClCompile Include="Monster.cpp" />
+    <ClCompile Include="GameData.cpp" />
     <ClCompile Include="Room.cpp" />
     <ClCompile Include="ClientPacketHandler.cpp" />
     <ClCompile Include="MoveSendPolicy.cpp" />
@@ -112,6 +113,7 @@
     <ClInclude Include="GameObject.h" />
     <ClInclude Include="Player.h" />
     <ClInclude Include="Monster.h" />
+    <ClInclude Include="GameData.h" />
     <ClInclude Include="Room.h" />
     <ClInclude Include="ClientPacketHandler.h" />
     <ClInclude Include="MoveSendPolicy.h" />
