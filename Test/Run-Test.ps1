@@ -29,6 +29,10 @@ $targets = if ($All) { $available } else { $Scenario }
 
 if ($Build) { Invoke-SolutionBuild -Configuration $Configuration }
 
+# 서버가 시작할 때 DB에 접속하므로, 시나리오 전에 DB가 있는지 확인 (없으면 만듦)
+& (Join-Path $PSScriptRoot '..\Database\Setup-Database.ps1')
+if ($LASTEXITCODE -ne 0) { Write-Host 'Database setup failed - scenarios not run' -ForegroundColor Red; exit 1 }
+
 $runDir = Join-Path $PSScriptRoot ('logs\' + (Get-Date -Format 'yyyyMMdd_HHmmss'))
 $results = @()
 

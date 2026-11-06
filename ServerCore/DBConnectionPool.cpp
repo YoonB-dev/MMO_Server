@@ -32,6 +32,7 @@ bool DBConnectionPool::Connect(int32 maxConnections, const WCHAR* connString)
 	if (::SQLSetEnvAttr(_env, SQL_ATTR_ODBC_VERSION, reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3), 0) != SQL_SUCCESS)
 	{
 		cout << "SQLSetEnvAttr ENV FAILED" << endl;
+		ReleaseAll();	// 만든 환경 핸들 정리
 		return false;
 	}
 
@@ -44,6 +45,8 @@ bool DBConnectionPool::Connect(int32 maxConnections, const WCHAR* connString)
 		DBConnection* connection = xnew<DBConnection>();
 		if (connection->Connect(_env, connString) == false)
 		{
+			xdelete(connection);	// 아직 목록에 안 넣은 것 -> 여기서 정리 (전에는 새고 있었음)
+			ReleaseAll();			// 앞에서 만든 연결 + 환경 핸들까지 정리 -> 다시 Connect 해도 되는 상태
 			return false;
 		}
 		_connections.push_back(connection);
@@ -61,20 +64,20 @@ void DBConnectionPool::Clear()
 
 void DBConnectionPool::ReleaseAll()
 {
-
-	if (_env != SQL_NULL_HANDLE)
-	{
-		// 정리
-		::SQLFreeHandle(SQL_HANDLE_ENV, _env);
-		_env = SQL_NULL_HANDLE;
-	}
-
+	// 연결들 먼저 (각 DBConnection 소멸자가 접속을 끊고 핸들 해제), 환경 핸들은 마지막
+	//   연결이 남아 있는 환경 핸들은 해제가 안 됨
 	for (DBConnection* connection : _connections)
 	{
 		xdelete(connection);
 	}
-
 	_connections.clear();
+
+	if (_env != SQL_NULL_HANDLE)
+	{
+		::SQLFreeHandle(SQL_HANDLE_ENV, _env);
+		_env = SQL_NULL_HANDLE;
+	}
+
 	_initialized = false;
 }
 

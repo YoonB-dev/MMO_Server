@@ -36,6 +36,9 @@
     <ClCompile Include="Monster.cpp">
       <Filter>Game</Filter>
     </ClCompile>
+    <ClCompile Include="GameData.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
     <ClCompile Include="Room.cpp">
       <Filter>Game</Filter>
     </ClCompile>
@@ -72,6 +75,9 @@
       <Filter>Game</Filter>
     </ClInclude>
     <ClInclude Include="Monster.h">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="GameData.h">
       <Filter>Game</Filter>
     </ClInclude>
     <ClInclude Include="Room.h">
