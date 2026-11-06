@@ -4,6 +4,7 @@
 #include "GameSession.h"
 #include "ClientPacketHandler.h"
 #include "DBConnectionPool.h"
+#include "DBBind.h"
 #include "Room.h"
 #include "MoveSendPolicy.h"
 
@@ -17,8 +18,8 @@ enum
 	DB_CONNECTION_COUNT = 4,
 };
 
-// DB를 쓸 때 true로 변경 (config.ini의 [Database] 정보로 연결)
-constexpr bool USE_DATABASE = false;
+// 기본 true: 시작할 때 DB 접속 + 확인 쿼리 (config.ini의 [Database]). DB 없이 네트워크만 볼 때만 false
+constexpr bool USE_DATABASE = true;
 
 // 실행 파일과 같은 폴더의 config.ini 로드
 bool LoadServerConfig()
@@ -36,16 +37,43 @@ bool LoadServerConfig()
 	return true;
 }
 
+// 접속만으로는 '쿼리가 실제로 도는지' 모름 -> 확인 쿼리 하나로 어느 DB, 어느 버전에 붙었는지 출력
+bool VerifyDatabase()
+{
+	DBConnectionGuard db(GDBConnectionPool);	// 풀에서 하나 꺼냄 (함수가 끝나면 소멸자가 반납)
+	if (!db)
+	{
+		wcout << L"[DB] no free connection for the startup check" << endl;
+		return false;
+	}
+
+	WCHAR dbName[64] = {};
+	WCHAR version[64] = {};
+
+	DBBind<0, 2> query(db, L"SELECT DATABASE(), VERSION()");	// 파라미터 0개, 결과 컬럼 2개
+	query.BindCol(0, dbName);
+	query.BindCol(1, version);
+
+	if (query.Execute() == false || query.Fetch() == false)
+	{
+		wcout << L"[DB] startup check query failed" << endl;	// 이유는 바로 위 [ODBC Error] 줄
+		return false;
+	}
+
+	wcout << L"[DB] connected: " << dbName << L" (MySQL " << version << L"), " << DB_CONNECTION_COUNT << L" connections" << endl;
+	return true;
+}
+
 bool ConnectDatabase()
 {
 	if (GDBConnectionPool->Connect(DB_CONNECTION_COUNT, GConfigManager->GetDBConnectionString().c_str()) == false)
 	{
-		wcout << L"Failed to connect database (check [Database] in config.ini)" << endl;
+		// 실패 이유는 바로 위 [ODBC Error] 줄 (DB가 없으면 Unknown database, MySQL이 꺼져 있으면 Can't connect)
+		wcout << L"Failed to connect database (check [Database] in config.ini, run Database/Setup-Database.ps1 if the database does not exist)" << endl;
 		return false;
 	}
 
-	wcout << L"Database connected (" << DB_CONNECTION_COUNT << L" connections)" << endl;
-	return true;
+	return VerifyDatabase();
 }
 
 ServerServiceRef StartServerService()
