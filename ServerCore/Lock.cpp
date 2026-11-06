@@ -25,7 +25,7 @@ void Lock::WriteLock(const char* name)
 	// 소유: 누군가가 WriteLock을 획득한 상태
 	// 공유: 누군가가 ReadLock을 획득한 상태
 
-	const uint32 beginTick = ::GetTickCount64();
+	const uint64 beginTick = ::GetTickCount64();
 	
 	// 상위 16비트에 쓰레드 아이디를 넣음
 	const uint32 desired = ((LthreadId << 16) & WRITE_THREAD_MASK); 
@@ -89,7 +89,7 @@ void Lock::ReadLock(const char* name)
 	}
 
 	// 아무도 소유하고 있지 않을 때 경합해서 공유권을 얻는다.
-	const uint32 beginTick = ::GetTickCount64();
+	const uint64 beginTick = ::GetTickCount64();
 
 	while (true)
 	{
