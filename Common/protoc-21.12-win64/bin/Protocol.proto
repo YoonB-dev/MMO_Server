@@ -69,12 +69,14 @@ message C_SKILL
 	uint64 target_id = 2;	// 공격할 몬스터 id
 }
 
-// 서버 -> 클라(전체): 스킬 사용 확정 -> 공격 모션 재생, 시전자 본인은 쿨타임 UI 시작
+// 서버 -> 클라(전체): 스킬 사용 확정 -> 시전 모션 재생, 시전자 본인은 쿨타임 UI 시작
+//   target_id = 0이면 빗나감/허공: yaw 방향으로 휘두르는 모션만 (데미지 없음)
 message S_SKILL
 {
 	uint64 object_id = 1;	// 시전자
 	int32 skill_id = 2;
-	uint64 target_id = 3;	// 클라는 시전자를 이 대상 쪽으로 돌려서 재생
+	uint64 target_id = 3;	// 맞은 대상 (0 = 빗나감)
+	float yaw = 4;			// 시전자가 바라보는 방향 (서버 좌표, 도)
 }
 
 // 서버 -> 클라(전체): HP가 바뀜 -> 데미지 숫자, HP바

@@ -38,6 +38,7 @@ struct SkillData
 	float	range = 0.f;	// 사거리 (m). 서버 위치 기준, Room이 지연 여유를 더해서 검사
 	int32	damage = 0;
 	int32	mpCost = 0;		// 쓸 때 드는 MP
+	bool	requiresTarget = false;	// true: 대상이 없거나 잘못되면 거절, false: 빗나감으로 나감 (허공 공격)
 };
 
 bool							LoadGameData();						// main에서 DB 접속 후 한 번. 실패하면 이유를 찍고 false

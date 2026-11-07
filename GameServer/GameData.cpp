@@ -70,19 +70,24 @@ static bool LoadMonsterSpawns(DBConnection& db)
 static bool LoadSkills(DBConnection& db)
 {
 	SkillData row;
+	int32 requiresTarget = 0;	// TINYINT(0/1). DBBind에 bool 바인딩이 없어서 int32로 받아 bool로 바꿈
 
-	DBBind<0, 5> query(db, L"SELECT skill_id, cooldown_ms, range_m, damage, mp_cost FROM data_skill");
+	DBBind<0, 6> query(db, L"SELECT skill_id, cooldown_ms, range_m, damage, mp_cost, requires_target FROM data_skill");
 	query.BindCol(0, row.skillId);
 	query.BindCol(1, row.cooldownMs);
 	query.BindCol(2, row.range);
 	query.BindCol(3, row.damage);
 	query.BindCol(4, row.mpCost);
+	query.BindCol(5, requiresTarget);
 
 	if (query.Execute() == false)
 		return false;
 
 	while (query.Fetch())
+	{
+		row.requiresTarget = (requiresTarget != 0);
 		s_skills[row.skillId] = row;
+	}
 
 	return true;
 }

@@ -32,6 +32,7 @@ public:
 	int32	lastTargetState = 0;	// --turn-test: 타겟 몬스터의 직전 항목 MoveState (MOVING -> MOVING 구분용)
 	bool	attackBurstSent = false;	// --attack-test: 검증용 공격 묶음을 보냈는지 (이후 S_PING마다 자동 공격)
 	int64	lastSkillUs = 0;		// --attack-test: 마지막으로 내 스킬이 확정된(S_SKILL) 시각. 클라 쪽 쿨타임 계산용
+	int32	autoAttackCount = 0;	// --attack-test: 보낸 자동 공격 수 (0: 먼 몬스터, 1: 허공, 이후: 타겟)
 	bool	rangedShotSent = false;	// --ranged-test: 원거리 스킬을 보냈는지
 
 private:

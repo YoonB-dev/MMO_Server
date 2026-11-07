@@ -21,6 +21,7 @@ bool Handle_INVALID(PacketSessionRef& session, BYTE* buffer, int32 len)
 
 static constexpr int32	BASIC_ATTACK_SKILL_ID = 1;			// Database/Data/skill.sql의 기본 공격 skill_id
 static constexpr int64	BASIC_ATTACK_COOLDOWN_US = 500'000;	// 같은 줄의 cooldown_ms(500)와 맞춰야 함 (DB를 바꾸면 여기도)
+static constexpr int32	RANGED_SKILL_ID = 2;					// 원거리 스킬 (대상 필수)
 
 static void SendSkill(PacketSessionRef& session, int32 skillId, uint64 targetId)
 {
@@ -30,30 +31,29 @@ static void SendSkill(PacketSessionRef& session, int32 skillId, uint64 targetId)
 	session->Send(ServerPacketHandler::MakeSendBuffer(pkt));
 }
 
+// 타겟이 아닌 다른 스폰의 몬스터 (스폰끼리 멀리 떨어져 있어서 기본 공격 사거리 밖). 없으면 0
+static uint64 FindFarMonster(const shared_ptr<ServerSession>& me)
+{
+	for (uint64 id : me->monsterIds)
+	{
+		if (id != me->chaseTargetId)
+			return id;
+	}
+	return 0;
+}
+
 // 공격 검증 확인용 (Test/Scenarios/MonsterAttack.ps1)
-//   추적 테스트로 몬스터가 앞에 멈춘 뒤 한 번에 보냄. 서버는 거절 이유별 횟수를 10초 통계에 출력
-//   잘못된 요청을 정상 요청보다 먼저 보냄 -> 쿨타임이 안 걸린 상태에서 각자 자기 이유로 거절되게
+//   추적 테스트로 몬스터가 앞에 멈춘 뒤 한 번에 보냄. 서버는 거절/빗나감 이유별 횟수를 10초 통계에 출력
+//   기본 공격은 빗나가도 쿨타임을 쓰므로, 기본 공격의 빗나감은 이후 자동 공격(TryAutoAttack)에서 하나씩 확인
 static void SendAttackTestBurst(PacketSessionRef& session)
 {
 	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
 
-	// 다른 스폰의 몬스터 (스폰끼리 30m 넘게 떨어져 있어서 사거리 밖)
-	uint64 farMonsterId = 0;
-	for (uint64 id : me->monsterIds)
-	{
-		if (id != me->chaseTargetId)
-		{
-			farMonsterId = id;
-			break;
-		}
-	}
-
-	SendSkill(session, 99, me->chaseTargetId);						// reject: unknown-skill
-	SendSkill(session, BASIC_ATTACK_SKILL_ID, 999999);				// reject: bad-target (없는 id)
-	SendSkill(session, BASIC_ATTACK_SKILL_ID, me->myId);			// reject: bad-target (플레이어 id)
-	SendSkill(session, BASIC_ATTACK_SKILL_ID, farMonsterId);		// reject: out-of-range
+	SendSkill(session, 99, me->chaseTargetId);						// 거절: unknown-skill
+	SendSkill(session, RANGED_SKILL_ID, 0);							// 거절: no-target (원거리는 대상 필수)
+	SendSkill(session, RANGED_SKILL_ID, me->myId);					// 거절: bad-target (플레이어 id)
 	SendSkill(session, BASIC_ATTACK_SKILL_ID, me->chaseTargetId);	// 통과 -> S_SKILL, S_CHANGE_HP hp=190
-	SendSkill(session, BASIC_ATTACK_SKILL_ID, me->chaseTargetId);	// reject: cooldown (0.5초 안에 또)
+	SendSkill(session, BASIC_ATTACK_SKILL_ID, me->chaseTargetId);	// 거절: cooldown (0.5초 안에 또)
 
 	me->attackBurstSent = true;
 	me->lastSkillUs = NowUs();	// S_SKILL보다 S_PING이 먼저 도착해도 바로 또 보내지 않게
@@ -61,6 +61,7 @@ static void SendAttackTestBurst(PacketSessionRef& session)
 
 // --attack-test: 1초마다 오는 S_PING을 타이머 대신 써서 기본 공격
 //   진짜 클라처럼 내 S_SKILL을 받은 뒤 쿨타임(0.5초)이 지났을 때만 보냄 -> 서버에서 거절되면 안 됨
+//   1번째: 먼 몬스터 (빗나감 out-of-range), 2번째: 허공 target 0 (빗나감 no-target), 그다음부터 타겟
 static void TryAutoAttack(PacketSessionRef& session)
 {
 	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
@@ -71,7 +72,15 @@ static void TryAutoAttack(PacketSessionRef& session)
 	if (NowUs() - me->lastSkillUs < BASIC_ATTACK_COOLDOWN_US)
 		return;
 
-	SendSkill(session, BASIC_ATTACK_SKILL_ID, me->chaseTargetId);
+	uint64 targetId = me->chaseTargetId;
+	if (me->autoAttackCount == 0)
+		targetId = FindFarMonster(me);
+	else if (me->autoAttackCount == 1)
+		targetId = 0;	// 허공
+
+	SendSkill(session, BASIC_ATTACK_SKILL_ID, targetId);
+	me->autoAttackCount++;
+	me->lastSkillUs = NowUs();	// 빗나감도 S_SKILL이 오지만, 그 전에 다음 S_PING이 와도 쿨타임 안에 또 보내지 않게
 }
 
 bool Handle_S_PING(PacketSessionRef& session, Protocol::S_PING& pkt)
@@ -253,7 +262,6 @@ static void UpdateChaseTest(PacketSessionRef& session, uint64 serverTick, const 
 //     첫 번째: 통과 (몬스터는 감지 거리 8m 밖이라 아직 나를 모름 -> 맞고 쫓아와야 함)
 //     두 번째: 쿨타임(5초)으로 거절 -> MP가 한 번만 깎여야 함
 //   멈춤 판단을 내 S_MOVE에서 하는 이유: 서 있는(Idle) 몬스터는 S_MOVE가 안 와서, 몬스터 항목만 기다리면 계속 걸어감
-static constexpr int32	RANGED_SKILL_ID = 2;			// Database/Data/skill.sql의 원거리 스킬
 static constexpr float	RANGED_TEST_STOP_DIST = 10.f;	// 같은 줄의 range_m (감지 거리 8m 밖)
 
 static void UpdateRangedTest(PacketSessionRef& session, const Protocol::MoveEntry& entry)
@@ -415,7 +423,8 @@ bool Handle_S_SKILL(PacketSessionRef& session, Protocol::S_SKILL& pkt)
 	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
 
 	ostringstream line;
-	line << "S_SKILL caster=" << pkt.object_id() << " skill=" << pkt.skill_id() << " target=" << pkt.target_id();
+	line << "S_SKILL caster=" << pkt.object_id() << " skill=" << pkt.skill_id() << " target=" << pkt.target_id()
+		<< " yaw=" << pkt.yaw();
 	Log(me->GetClientId(), line.str());
 
 	// 내 스킬이 확정됨 -> 클라 쪽 쿨타임 시작 (진짜 클라도 S_SKILL을 받은 시점부터 잼)

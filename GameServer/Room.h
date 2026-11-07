@@ -5,6 +5,7 @@
 namespace Protocol { class S_MOVE; }
 class MoveSendPolicy;
 struct MonsterSpawnData;
+struct SkillData;
 
 // 게임 월드(전역 방 하나). 입장/퇴장/이동/전투는 전부 DoAsync로 이 JobQueue에 넣어서 한 줄로 처리한다 (흐름은 Room.cpp 맨 위)
 class Room : public JobQueue
@@ -27,15 +28,25 @@ class Room : public JobQueue
 	static constexpr float	RAD_TO_DEG = 57.2957795f;					// 라디안 -> 도 (180 / π)
 	static constexpr float	SKILL_RANGE_SLACK = 1.f;	// 사거리 여유 (m). 클라가 보는 위치는 지연만큼 다름 (몬스터 4m/s x 왕복 200ms = 0.8m)
 
-	// 스킬 요청을 거절한 횟수 (이유별). 한 줄씩 찍지 않고 세기만 함 -> 핵이 초당 수천 개를 보내도 로그가 넘치지 않음
+	// 타겟 검사 결과 (HandleSkill의 4~6번)
+	enum class TargetCheck { Ok, NoTarget, BadTarget, Invulnerable, OutOfRange };
+
+	// 타겟 문제 이유별 횟수. 거절(대상 필수 스킬)과 빗나감(대상 없어도 되는 스킬)에 같은 모양으로 씀
+	struct TargetFailStats
+	{
+		uint64	noTarget = 0;		// target_id = 0
+		uint64	badTarget = 0;		// 없는 id, 이미 죽은 몬스터, 플레이어 id
+		uint64	invulnerable = 0;	// 복귀(Return) 중인 몬스터
+		uint64	outOfRange = 0;		// 서버 위치 기준 사거리 + 여유 밖
+	};
+
+	// 스킬을 아예 못 쓴 요청 (S_SKILL 없음). 한 줄씩 찍지 않고 세기만 함 -> 핵이 초당 수천 개를 보내도 로그가 넘치지 않음
 	struct SkillRejectStats
 	{
-		uint64	unknownSkill = 0;	// 표(data_skill)에 없는 skill_id
-		uint64	cooldown = 0;		// 쿨타임 중
-		uint64	noMp = 0;			// MP 부족
-		uint64	badTarget = 0;		// 없는 id, 이미 죽은 몬스터, 플레이어 id
-		uint64	invulnerable = 0;	// 돌아가는 중(Return)인 몬스터
-		uint64	outOfRange = 0;		// 서버 위치 기준 사거리 + 여유 밖
+		uint64			unknownSkill = 0;	// 표(data_skill)에 없는 skill_id
+		uint64			cooldown = 0;		// 쿨타임 중
+		uint64			noMp = 0;			// MP 부족
+		TargetFailStats	target;				// 대상 필수 스킬의 타겟 문제
 	};
 
 public:
@@ -65,6 +76,8 @@ private:
 	bool	ApplyInput(const PlayerRef& player);
 	void	MovePlayer(const PlayerRef& player);
 	void	RejectInput(PlayerRef player, uint32 seq, const char* reason);
+	TargetCheck	CheckTarget(const PlayerRef& player, const SkillData& skill, uint64 targetId, MonsterRef& outTarget);
+	static void	CountTargetFail(TargetFailStats& stats, TargetCheck result);
 	void	ApplyDamage(GameObject& target, uint64 attackerId, int32 damage);
 	void	Broadcast(SendBufferRef sendBuffer, uint64 exceptId = 0);
 	void	SendTo(PlayerRef player, SendBufferRef sendBuffer);
@@ -84,6 +97,7 @@ private:
 	uint64	_workTimeMaxUs = 0;		// 가장 오래 걸린 틱
 	uint64	_monsterMovesSent = 0;	// S_MOVE에 넣은 몬스터 항목 수
 	SkillRejectStats	_skillRejects;	// 스킬 요청 거절 이유별 횟수
+	TargetFailStats		_skillMisses;	// 빗나감 이유별 횟수 (S_SKILL target 0으로 나간 것)
 };
 
 extern RoomRef GRoom;

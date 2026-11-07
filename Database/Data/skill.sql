@@ -15,13 +15,15 @@ CREATE TABLE data_skill (
     cooldown_ms  INT          NOT NULL,            -- 서버 틱(50ms)보다 짧으면 의미 없음
     range_m      FLOAT        NOT NULL,            -- 서버 위치 기준. 서버가 지연 여유 1m를 더해서 검사
     damage       INT          NOT NULL,
-    mp_cost      INT          NOT NULL,            -- 쓸 때 드는 MP (기본 공격은 0)
+    mp_cost          INT          NOT NULL,            -- 쓸 때 드는 MP (기본 공격은 0)
+    requires_target  TINYINT      NOT NULL,            -- 1: 대상이 꼭 있어야 함 (없거나 잘못되면 거절), 0: 빗나가도 나감 (허공 공격)
     CONSTRAINT chk_skill_cooldown CHECK (cooldown_ms >= 50),
     CONSTRAINT chk_skill_range    CHECK (range_m > 0),
     CONSTRAINT chk_skill_damage   CHECK (damage >= 0),
-    CONSTRAINT chk_skill_mp       CHECK (mp_cost >= 0)
+    CONSTRAINT chk_skill_mp       CHECK (mp_cost >= 0),
+    CONSTRAINT chk_skill_target   CHECK (requires_target IN (0, 1))
 ) ENGINE=InnoDB;
 
-INSERT INTO data_skill (skill_id, name, cooldown_ms, range_m, damage, mp_cost) VALUES
-    (1, 'BasicAttack', 500, 2, 10, 0),
-    (2, 'RangedShot', 5000, 10, 30, 10);
+INSERT INTO data_skill (skill_id, name, cooldown_ms, range_m, damage, mp_cost, requires_target) VALUES
+    (1, 'BasicAttack', 500, 2, 10, 0, 0),
+    (2, 'RangedShot', 5000, 10, 30, 10, 1);

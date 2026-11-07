@@ -17,10 +17,11 @@
 // 틱 (50ms마다 DoTimer로 다음 틱 예약)
 //   1초마다   ResetInputCounts, UpdatePlayerStats (자연 회복)
 //   매 틱     UpdatePlayers (입력 적용 -> 이동) -> UpdateMonsters (AI) -> 바뀐 이동을 S_MOVE 하나로 전송
-//   10초마다  LogStats (틱 간격, 처리 시간, 몬스터 전송 수, 스킬 거절 수)
+//   10초마다  LogStats (틱 간격, 처리 시간, 몬스터 전송 수, 스킬 거절/빗나감 수)
 //
 // 전투 (C_SKILL -> HandleSkill)
-//   검사 6개 -> 확정(쿨타임, MP) -> S_SKILL -> ApplyDamage(S_CHANGE_HP)
+//   검사 6개 (타겟 문제는 대상 필수 스킬이면 거절, 아니면 빗나감) -> 확정(쿨타임, MP) -> S_SKILL
+//   -> 빗나감이면 끝, 맞았으면 ApplyDamage(S_CHANGE_HP)
 //   -> HP 0이면 KillMonster (S_DIE, 리스폰 예약), 아니면 Monster::OnDamaged (어그로)
 
 // main에서 생성 (전역 변수 초기화 시점에는 ServerCore의 GMemory가 아직 없을 수 있음)
@@ -123,13 +124,22 @@ void Room::LogStats(uint64 now)
 		<< ", work avg " << workAvgMs << "ms max " << workMaxMs << "ms"
 		<< ", monster moves " << _monsterMovesSent << " (" << _monsterSendPolicy->Name() << ")" << endl;
 
-	// 스킬 거절: 이 구간에 하나라도 있었을 때만 출력 (정상 플레이에서는 거의 0)
+	// 스킬 거절 / 빗나감: 이 구간에 하나라도 있었을 때만 출력
+	//   거절은 정상 플레이에서 거의 0 (핵 의심용), 빗나감은 허공 공격이라 정상 플레이에서도 생김
 	const SkillRejectStats& r = _skillRejects;
-	if (r.unknownSkill + r.cooldown + r.noMp + r.badTarget + r.invulnerable + r.outOfRange > 0)
+	const TargetFailStats& rt = r.target;
+	if (r.unknownSkill + r.cooldown + r.noMp + rt.noTarget + rt.badTarget + rt.invulnerable + rt.outOfRange > 0)
 	{
 		cout << "[Room] skill rejects: unknown-skill " << r.unknownSkill << ", cooldown " << r.cooldown
-			<< ", no-mp " << r.noMp << ", bad-target " << r.badTarget << ", invulnerable " << r.invulnerable
-			<< ", out-of-range " << r.outOfRange << endl;
+			<< ", no-mp " << r.noMp << ", no-target " << rt.noTarget << ", bad-target " << rt.badTarget
+			<< ", invulnerable " << rt.invulnerable << ", out-of-range " << rt.outOfRange << endl;
+	}
+
+	const TargetFailStats& m = _skillMisses;
+	if (m.noTarget + m.badTarget + m.invulnerable + m.outOfRange > 0)
+	{
+		cout << "[Room] skill misses: no-target " << m.noTarget << ", bad-target " << m.badTarget
+			<< ", invulnerable " << m.invulnerable << ", out-of-range " << m.outOfRange << endl;
 	}
 
 	_logStartTime = now;
@@ -137,6 +147,7 @@ void Room::LogStats(uint64 now)
 	_workTimeMaxUs = 0;
 	_monsterMovesSent = 0;
 	_skillRejects = {};
+	_skillMisses = {};
 }
 
 void Room::Enter(PlayerRef player)
@@ -226,9 +237,10 @@ void Room::HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 butt
 
 // C_SKILL 처리: 클라가 고른 타겟을 믿지 않고 서버 데이터로 다시 검사
 //   나 자신:  1 스킬 존재   2 쿨타임   3 MP
-//   타겟:     4 방에 있는 몬스터   5 무적(복귀 중) 아님   6 서버 위치 거리 <= 사거리 + 여유
-//   하나라도 걸리면 이유별 횟수만 세고 끝 (클라에는 아무것도 안 보냄)
-//   통과하면 쿨타임과 MP를 쓰고 S_SKILL -> 데미지
+//   타겟:     4 방에 있는 몬스터   5 무적(복귀 중) 아님   6 서버 위치 거리 <= 사거리 + 여유  (CheckTarget)
+//   1~3에 걸리면 거절: 이유별 횟수만 세고 끝 (클라에는 아무것도 안 보냄, 쿨타임/MP 안 씀)
+//   4~6에 걸리면 대상 필수 스킬은 거절, 아니면 빗나감 (S_SKILL target 0, 쿨타임은 씀)
+//   통과하면 쿨타임과 MP를 쓰고 S_SKILL -> 맞았으면 데미지
 void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 {
 	// 요청이 줄에서 기다리는 사이 이미 Leave가 처리된 플레이어
@@ -260,32 +272,17 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 		return;
 	}
 
-	// 4. 방에 있는 몬스터 (없는 id, 이미 죽은 몬스터, 플레이어 id는 여기서 걸림)
-	auto it = _monsters.find(targetId);
-	if (it == _monsters.end())
+	// 4~6. 타겟. 문제가 있으면 target은 nullptr 그대로
+	MonsterRef target;
+	const TargetCheck check = CheckTarget(player, *skill, targetId, target);
+	if (check != TargetCheck::Ok)
 	{
-		_skillRejects.badTarget++;
-		return;
-	}
-	MonsterRef target = it->second;	// shared_ptr 복사: 아래에서 죽어 맵에서 빠져도 이 함수 끝까지 살아 있음
-
-	// 5. 복귀(Return) 중이면 무적: 끌고 가서 반격 없이 때리는 것 방지
-	if (target->IsInvulnerable())
-	{
-		_skillRejects.invulnerable++;
-		return;
-	}
-
-	// 6. 거리: 클라가 본 위치가 아니라 서버 위치로 잼 (+ 지연 여유)
-	Protocol::PosInfo* myPos = player->GetPosInfo();
-	const Protocol::PosInfo* targetPos = target->GetPosInfo();
-	const float dx = targetPos->x() - myPos->x();
-	const float dz = targetPos->z() - myPos->z();
-	const float maxRange = skill->range + SKILL_RANGE_SLACK;
-	if (dx * dx + dz * dz > maxRange * maxRange)	// 제곱끼리 비교 -> sqrt 안 씀
-	{
-		_skillRejects.outOfRange++;
-		return;
+		if (skill->requiresTarget)
+		{
+			CountTargetFail(_skillRejects.target, check);	// 대상 필수 -> 거절
+			return;
+		}
+		CountTargetFail(_skillMisses, check);				// 대상 없어도 됨 -> 빗나감으로 계속
 	}
 
 	// ---- 여기부터 확정 ----
@@ -300,18 +297,27 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 		SendMp(player);
 	}
 
-	// 멈춰 있을 때만 타겟 쪽으로 돌아봄 (이동 중엔 이동 방향 yaw를 유지하고, 클라가 상체만 돌림)
-	if (player->GetMoveInfo()->state() == Protocol::MOVE_STATE_IDLE)
-		myPos->set_yaw(std::atan2(dx, dz) * RAD_TO_DEG);
+	// 맞았고 멈춰 있을 때만 타겟 쪽으로 돌아봄 (이동 중엔 이동 방향 yaw를 유지하고, 클라가 상체만 돌림)
+	//   빗나감이면 지금 yaw 그대로 -> 그 방향으로 허공을 휘두름
+	Protocol::PosInfo* myPos = player->GetPosInfo();
+	if (target != nullptr && player->GetMoveInfo()->state() == Protocol::MOVE_STATE_IDLE)
+	{
+		const Protocol::PosInfo* targetPos = target->GetPosInfo();
+		myPos->set_yaw(std::atan2(targetPos->x() - myPos->x(), targetPos->z() - myPos->z()) * RAD_TO_DEG);
+	}
 
-	// 모두에게: 누가 누구에게 무슨 스킬을 썼다 (공격 모션)
+	// 모두에게: 누가 무슨 스킬을 어느 방향으로 썼고, 누가 맞았나 (빗나감이면 target 0)
 	{
 		Protocol::S_SKILL pkt;
 		pkt.set_object_id(player->GetObjectId());
 		pkt.set_skill_id(skillId);
-		pkt.set_target_id(targetId);
+		pkt.set_target_id(target != nullptr ? target->GetObjectId() : 0);
+		pkt.set_yaw(myPos->yaw());
 		Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
 	}
+
+	if (target == nullptr)
+		return;		// 빗나감: 데미지 없음
 
 	ApplyDamage(*target, player->GetObjectId(), skill->damage);
 
@@ -320,6 +326,49 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 		KillMonster(target, player->GetObjectId());
 	else
 		target->OnDamaged(player->GetObjectId());	// 어그로
+}
+
+// HandleSkill의 4~6번 타겟 검사. Ok면 outTarget에 몬스터를 채움 (아니면 건드리지 않음)
+Room::TargetCheck Room::CheckTarget(const PlayerRef& player, const SkillData& skill, uint64 targetId, MonsterRef& outTarget)
+{
+	// 4. 방에 있는 몬스터 (0은 허공, 없는 id / 이미 죽은 몬스터 / 플레이어 id는 BadTarget)
+	if (targetId == 0)
+		return TargetCheck::NoTarget;
+
+	auto it = _monsters.find(targetId);
+	if (it == _monsters.end())
+		return TargetCheck::BadTarget;
+
+	const MonsterRef& monster = it->second;
+
+	// 5. 복귀(Return) 중이면 무적: 끌고 가서 반격 없이 때리는 것 방지
+	if (monster->IsInvulnerable())
+		return TargetCheck::Invulnerable;
+
+	// 6. 거리: 클라가 본 위치가 아니라 서버 위치로 잼 (+ 지연 여유). 제곱끼리 비교 -> sqrt 안 씀
+	const Protocol::PosInfo* myPos = player->GetPosInfo();
+	const Protocol::PosInfo* targetPos = monster->GetPosInfo();
+	const float dx = targetPos->x() - myPos->x();
+	const float dz = targetPos->z() - myPos->z();
+	const float maxRange = skill.range + SKILL_RANGE_SLACK;
+	if (dx * dx + dz * dz > maxRange * maxRange)
+		return TargetCheck::OutOfRange;
+
+	outTarget = monster;	// shared_ptr 복사: 죽어서 맵에서 빠져도 HandleSkill 끝까지 살아 있음
+	return TargetCheck::Ok;
+}
+
+// 타겟 문제를 이유별로 셈 (거절, 빗나감 공통)
+void Room::CountTargetFail(TargetFailStats& stats, TargetCheck result)
+{
+	switch (result)
+	{
+	case TargetCheck::NoTarget:		stats.noTarget++;		break;
+	case TargetCheck::BadTarget:	stats.badTarget++;		break;
+	case TargetCheck::Invulnerable:	stats.invulnerable++;	break;
+	case TargetCheck::OutOfRange:	stats.outOfRange++;		break;
+	case TargetCheck::Ok:			break;
+	}
 }
 
 PlayerRef Room::FindPlayer(uint64 objectId)
