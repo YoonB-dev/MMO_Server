@@ -7,11 +7,11 @@
 DROP TABLE IF EXISTS data_monster_spawn;
 DROP TABLE IF EXISTS data_monster;
 
--- 몬스터 종류별 AI 수치 (전에 Monster.h에 상수로 있던 값)
+-- 몬스터 종류별 수치 (HP, AI)
 -- lose_range가 detect_range보다 커야 경계에서 Chase/포기가 왔다 갔다 하지 않음
 CREATE TABLE data_monster (
     monster_id    INT          NOT NULL PRIMARY KEY,
-    name          VARCHAR(32)  NOT NULL,            -- 사람이 보는 용도 (서버는 아직 안 읽음)
+    name          VARCHAR(32)  NOT NULL,            -- 사람이 보는 용도 (서버는 안 읽음)
     max_hp        INT          NOT NULL,            -- 스폰할 때 HP
     patrol_range  FLOAT        NOT NULL,            -- 스폰 기준 ±범위 안에서 배회
     patrol_speed  FLOAT        NOT NULL,

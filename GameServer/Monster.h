@@ -1,8 +1,13 @@
 ﻿#pragma once
 #include "GameObject.h"
-#include "GameData.h"	// MonsterSpawnData를 값(복사본)으로 들고 있어서 크기를 알아야 함 (선언만으로는 부족)
+#include "GameData.h"	// MonsterSpawnData를 값으로 들고 있어서 정의가 필요 (선언만으로는 부족)
 
-// 몬스터 AI 상태 (서버 판단용. 클라에는 안 보내고, 클라는 MoveInfo의 IDLE/MOVING만 봄)
+// 몬스터 AI 상태 (서버 판단용. 클라는 MoveInfo의 IDLE/MOVING만 봄)
+//
+//   Idle --대기 시간 끝--> Patrol --목적지 도착--> Idle
+//   Idle / Patrol --감지 거리 안에 플레이어, 또는 맞음(OnDamaged)--> Chase
+//   Chase --타겟이 나감(left) / 멀어짐(lost) / 스폰에서 너무 멂(leash)--> Return
+//   Return --스폰 도착, HP 회복--> Idle          * Return 중에는 플레이어를 무시하고 무적
 enum class MonsterState
 {
 	Idle,		// 제자리 대기
@@ -14,7 +19,6 @@ enum class MonsterState
 // 몬스터 = 월드 객체 + AI. 세션 없이 Room 틱마다 서버가 직접 움직인다
 class Monster : public GameObject
 {
-	// AI 수치(배회 범위, 감지 거리, 속도 등)는 몬스터 종류마다 다르게 하려고 DB(data_monster)로 옮김 -> _data에서 읽음
 	static constexpr float	RAD_TO_DEG = 57.2957795f;	// Room.h와 같은 값
 
 public:

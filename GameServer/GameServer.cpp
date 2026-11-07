@@ -129,6 +129,10 @@ const MoveSendPolicy* ParseMonsterSendPolicy(int argc, char* argv[])
 	return policy;
 }
 
+// 시작 순서 (메인 스레드)
+//   설정(config.ini) -> DB 접속 + 확인 쿼리 -> 기획 데이터 로드(LoadGameData)
+//   -> Room 생성, 몬스터 스폰, 첫 틱 예약 -> 서버 열기(listen) -> 워커 스레드
+//   DB와 기획 데이터를 워커보다 먼저 준비하므로, 이후 여러 스레드가 락 없이 읽기만 함
 int main(int argc, char* argv[])
 {
 	::SetConsoleOutputCP(CP_UTF8);
@@ -143,7 +147,7 @@ int main(int argc, char* argv[])
 	if (USE_DATABASE && ConnectDatabase() == false)
 		return -1;
 
-	// 기획 데이터(몬스터 종류, 스폰)를 DB에서 읽음. Room::Start(몬스터 스폰)보다 먼저
+	// 기획 데이터(몬스터, 스폰, 스킬). Room::Start(몬스터 스폰)보다 먼저
 	//   USE_DATABASE가 false면 건너뜀 -> 몬스터 없이 네트워크만 동작
 	if (USE_DATABASE && LoadGameData() == false)
 		return -1;

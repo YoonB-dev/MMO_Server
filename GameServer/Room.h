@@ -1,11 +1,12 @@
 ﻿#pragma once
 #include "JobQueue.h"
 
-namespace Protocol { class S_MOVE; }	// 참조로만 받으니 선언만 (Protocol.pb.h 전체를 include하지 않음)
+// 매개변수로만 쓰는 타입은 선언만 (무거운 헤더를 include하지 않으려고, 정의는 Room.cpp에서 include)
+namespace Protocol { class S_MOVE; }
 class MoveSendPolicy;
-struct MonsterSpawnData;	// 값으로 받지만, 선언만 할 때는 크기를 몰라도 됨 (정의하는 Room.cpp가 GameData.h를 include)
+struct MonsterSpawnData;
 
-// 게임 월드(전역 방 하나). 입장/퇴장/이동은 전부 DoAsync로 이 JobQueue에 넣어서 한 줄로 처리한다
+// 게임 월드(전역 방 하나). 입장/퇴장/이동/전투는 전부 DoAsync로 이 JobQueue에 넣어서 한 줄로 처리한다 (흐름은 Room.cpp 맨 위)
 class Room : public JobQueue
 {
 	enum : uint64
@@ -57,7 +58,7 @@ private:
 	void	Tick();
 	void	LogStats(uint64 now);
 	void	ResetInputCounts();
-	void	UpdatePlayerStats();					// 1초마다 스탯 갱신 (지금은 자연 회복)
+	void	UpdatePlayerStats();					// 1초마다 스탯 갱신 (자연 회복)
 	void	SendMp(const PlayerRef& player);		// S_CHANGE_MP를 본인에게
 	void	UpdatePlayers(Protocol::S_MOVE& pkt);
 	void	UpdateMonsters(Protocol::S_MOVE& pkt);

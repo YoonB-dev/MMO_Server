@@ -10,6 +10,19 @@
 #include <algorithm>
 #include <chrono>
 
+// Room: 게임 월드 하나 (전역 GRoom). JobQueue라서 이 객체의 함수는 한 번에 한 스레드만 실행함
+//   -> _players, _monsters와 플레이어/몬스터 상태는 Room 안에서만 만지고 락이 없음
+//   패킷 핸들러(IOCP 워커)는 직접 만지지 않고 DoAsync로 일을 넘김
+//
+// 틱 (50ms마다 DoTimer로 다음 틱 예약)
+//   1초마다   ResetInputCounts, UpdatePlayerStats (자연 회복)
+//   매 틱     UpdatePlayers (입력 적용 -> 이동) -> UpdateMonsters (AI) -> 바뀐 이동을 S_MOVE 하나로 전송
+//   10초마다  LogStats (틱 간격, 처리 시간, 몬스터 전송 수, 스킬 거절 수)
+//
+// 전투 (C_SKILL -> HandleSkill)
+//   검사 6개 -> 확정(쿨타임, MP) -> S_SKILL -> ApplyDamage(S_CHANGE_HP)
+//   -> HP 0이면 KillMonster (S_DIE, 리스폰 예약), 아니면 Monster::OnDamaged (어그로)
+
 // main에서 생성 (전역 변수 초기화 시점에는 ServerCore의 GMemory가 아직 없을 수 있음)
 RoomRef GRoom;
 
@@ -33,11 +46,11 @@ void Room::Start()
 void Room::SpawnMonsters()
 {
 	for (const MonsterSpawnData& spawn : GetMonsterSpawns())
-		SpawnMonster(spawn);	// 값으로 받는 함수라 한 줄씩 복사돼서 넘어감
+		SpawnMonster(spawn);
 }
 
-// 스폰 줄 하나로 몬스터 한 마리. 시작할 때(SpawnMonsters)와 리스폰(KillMonster가 예약한 DoTimer) 때 같이 씀
-//   spawn을 값으로 받는 이유: DoTimer가 넘기는 값의 타입과 매개변수 타입이 정확히 같아야 해서
+// 스폰 줄 하나로 몬스터 한 마리 생성 + 이미 있는 사람들에게 S_SPAWN. 시작할 때와 리스폰(KillMonster의 DoTimer) 때 같이 씀
+//   spawn을 값으로 받음: DoTimer로 넘길 때 넘기는 값과 매개변수 타입이 정확히 같아야 해서
 void Room::SpawnMonster(MonsterSpawnData spawn)
 {
 	const MonsterData* data = FindMonsterData(spawn.monsterId);	// LoadGameData가 검사해 둬서 항상 있음
@@ -123,7 +136,7 @@ void Room::LogStats(uint64 now)
 	_workTimeSumUs = 0;
 	_workTimeMaxUs = 0;
 	_monsterMovesSent = 0;
-	_skillRejects = {};	// 전부 0으로
+	_skillRejects = {};
 }
 
 void Room::Enter(PlayerRef player)
@@ -211,14 +224,18 @@ void Room::HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 butt
 	player->hasNewInput = true;
 }
 
-// C_SKILL 처리. 클라가 고른 타겟을 믿지 않고 서버 데이터로 다시 검사한 뒤 데미지
+// C_SKILL 처리: 클라가 고른 타겟을 믿지 않고 서버 데이터로 다시 검사
+//   나 자신:  1 스킬 존재   2 쿨타임   3 MP
+//   타겟:     4 방에 있는 몬스터   5 무적(복귀 중) 아님   6 서버 위치 거리 <= 사거리 + 여유
+//   하나라도 걸리면 이유별 횟수만 세고 끝 (클라에는 아무것도 안 보냄)
+//   통과하면 쿨타임과 MP를 쓰고 S_SKILL -> 데미지
 void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 {
 	// 요청이 줄에서 기다리는 사이 이미 Leave가 처리된 플레이어
 	if (_players.find(player->GetObjectId()) == _players.end())
 		return;
 
-	// 1. 표(data_skill)에 있는 스킬인가
+	// 1. 스킬 존재 (data_skill)
 	const SkillData* skill = FindSkillData(skillId);
 	if (skill == nullptr)
 	{
@@ -226,9 +243,9 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 		return;
 	}
 
-	// 2. 쿨타임: 다시 쓸 수 있는 틱보다 이르면 거절 (1틱 여유)
-	//    readyTick - 1로 쓰지 않는 이유: readyTick이 0이면 uint64는 -1이 못 되고 아주 큰 수가 됨
-	//    [] 는 키가 없으면 0으로 칸을 만듦 -> 스킬 id 검사 뒤에 둬야 아무 id로나 칸이 생기지 않음
+	// 2. 쿨타임 (1틱 여유)
+	//    readyTick - 1 대신 반대쪽에 더함: uint64라 0 - 1이 아주 큰 수가 됨
+	//    []는 키가 없으면 0으로 칸을 만듦 -> 스킬 검사 뒤에 둬야 아무 id로나 칸이 생기지 않음
 	uint64& readyTick = player->skillReadyTick[skillId];
 	if (_tick + COOLDOWN_SLACK_TICKS < readyTick)
 	{
@@ -236,31 +253,30 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 		return;
 	}
 
-	// 3. MP: 남은 MP가 이 스킬 비용보다 적으면 거절 (기본 공격은 비용 0이라 항상 통과)
-	//    여기까지(스킬, 쿨타임, MP)가 '나 자신'의 상태 검사, 아래(타겟, 무적, 거리)가 '타겟' 검사
+	// 3. MP (비용 0인 스킬은 항상 통과)
 	if (player->mp < skill->mpCost)
 	{
 		_skillRejects.noMp++;
 		return;
 	}
 
-	// 4. 타겟: 지금 방에 있는 몬스터인가 (없는 id, 플레이어 id는 여기서 걸림)
+	// 4. 방에 있는 몬스터 (없는 id, 이미 죽은 몬스터, 플레이어 id는 여기서 걸림)
 	auto it = _monsters.find(targetId);
 	if (it == _monsters.end())
 	{
 		_skillRejects.badTarget++;
 		return;
 	}
-	MonsterRef target = it->second;	// shared_ptr 복사 -> 이 함수가 끝날 때까지 몬스터가 살아 있음
+	MonsterRef target = it->second;	// shared_ptr 복사: 아래에서 죽어 맵에서 빠져도 이 함수 끝까지 살아 있음
 
-	// 5. 돌아가는 중(Return)인 몬스터는 무적: 끌고 가서 반격 없이 때리는 것 방지
+	// 5. 복귀(Return) 중이면 무적: 끌고 가서 반격 없이 때리는 것 방지
 	if (target->IsInvulnerable())
 	{
 		_skillRejects.invulnerable++;
 		return;
 	}
 
-	// 6. 거리: 클라가 본 위치가 아니라 서버가 가진 위치로 잼 (+ 지연 여유)
+	// 6. 거리: 클라가 본 위치가 아니라 서버 위치로 잼 (+ 지연 여유)
 	Protocol::PosInfo* myPos = player->GetPosInfo();
 	const Protocol::PosInfo* targetPos = target->GetPosInfo();
 	const float dx = targetPos->x() - myPos->x();
@@ -273,7 +289,7 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 	}
 
 	// ---- 여기부터 확정 ----
-	// ms -> 틱은 올림: 50ms 단위가 아니어도 설계값보다 짧아지지 않게 (500ms -> 10틱, 520ms -> 11틱)
+	// ms -> 틱은 올림: 설계값보다 짧아지지 않게 (500ms -> 10틱, 520ms -> 11틱)
 	const uint64 cooldownTicks = (static_cast<uint64>(skill->cooldownMs) + TICK_INTERVAL_MS - 1) / TICK_INTERVAL_MS;
 	readyTick = _tick + cooldownTicks;
 
@@ -284,8 +300,7 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 		SendMp(player);
 	}
 
-	// 멈춰 있을 때만 타겟 쪽으로 돌아봄
-	//   이동 중에 바꾸면 이후 S_MOVE에 '옆으로 달리면서 몸은 타겟을 보는' yaw가 실림 -> 이동 중엔 클라가 상체만 돌림
+	// 멈춰 있을 때만 타겟 쪽으로 돌아봄 (이동 중엔 이동 방향 yaw를 유지하고, 클라가 상체만 돌림)
 	if (player->GetMoveInfo()->state() == Protocol::MOVE_STATE_IDLE)
 		myPos->set_yaw(std::atan2(dx, dz) * RAD_TO_DEG);
 
@@ -300,11 +315,11 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 
 	ApplyDamage(*target, player->GetObjectId(), skill->damage);
 
-	// HP가 0이 됐으면 죽음 처리. ApplyDamage는 GameObject용이라 몬스터만의 처리(맵에서 빼기, 리스폰)는 여기서
+	// 몬스터만의 처리는 여기서 (ApplyDamage는 GameObject 공통)
 	if (target->GetStatInfo()->hp() == 0)
 		KillMonster(target, player->GetObjectId());
 	else
-		target->OnDamaged(player->GetObjectId());	// 살아 있으면 반응 (아무도 안 쫓고 있었으면 때린 사람을 쫓음)
+		target->OnDamaged(player->GetObjectId());	// 어그로
 }
 
 PlayerRef Room::FindPlayer(uint64 objectId)
@@ -340,16 +355,15 @@ void Room::ResetInputCounts()
 		player->inputCount = 0;
 }
 
-// 1초마다 플레이어 스탯 갱신. 지금은 자연 회복만 (나중에 버프/지속 효과처럼 '1초마다' 하는 처리도 여기에)
-//   계산은 Player::Regen, 누구에게 보낼지는 여기서 정함
-//   _players를 도는 중에 BroadcastHp도 _players를 돌지만, 둘 다 읽기만 해서 괜찮음 (넣거나 빼는 것만 안 됨)
+// 1초마다 플레이어 스탯 갱신 (자연 회복). 계산은 Player::Regen, 누구에게 보낼지는 여기서
+//   _players를 도는 중에 BroadcastHp도 _players를 돌지만 둘 다 읽기만 해서 안전 (넣거나 빼면 안 됨)
 void Room::UpdatePlayerStats()
 {
 	for (auto& [id, player] : _players)
 	{
 		const Player::RegenResult result = player->Regen();
 		if (result.hpChanged)
-			BroadcastHp(*player, 0, 0);	// HP는 모두가 보는 정보 -> 전체 (몬스터 복귀 회복과 같은 모양)
+			BroadcastHp(*player, 0, 0);	// HP는 모두가 보는 정보 -> 전체
 		if (result.mpChanged)
 			SendMp(player);				// MP는 본인만
 	}
@@ -424,7 +438,7 @@ bool Room::ApplyInput(const PlayerRef& player)
 	moveInfo->set_state(stop ? Protocol::MOVE_STATE_IDLE : Protocol::MOVE_STATE_MOVING);
 	moveInfo->set_speed(stop ? 0.f : MOVE_SPEED);
 
-	// 바라보는 방향 (Unity 기준 +z = 0도, +x = 90도). 멈출 때는 마지막으로 보던 방향 유지
+	// 바라보는 방향 (서버 좌표: +z = 0도, +x = 90도). 멈출 때는 마지막으로 보던 방향 유지
 	if (stop == false)
 		moveInfo->mutable_pos_info()->set_yaw(std::atan2(input.dirX, input.dirZ) * RAD_TO_DEG);
 
@@ -441,7 +455,7 @@ void Room::MovePlayer(const PlayerRef& player)
 	Protocol::PosInfo* pos = moveInfo->mutable_pos_info();
 	pos->set_x(std::clamp(pos->x() + moveInfo->dir_x() * step, -WORLD_HALF_SIZE, WORLD_HALF_SIZE));
 	pos->set_z(std::clamp(pos->z() + moveInfo->dir_z() * step, -WORLD_HALF_SIZE, WORLD_HALF_SIZE));
-	// y는 아직 항상 0 (점프 단계에서 vel_y로 처리)
+	// y(높이)는 쓰지 않음 (점프 없음)
 }
 
 void Room::RejectInput(PlayerRef player, uint32 seq, const char* reason)
@@ -450,8 +464,8 @@ void Room::RejectInput(PlayerRef player, uint32 seq, const char* reason)
 		<< ", seq " << seq << ", reason " << reason << endl;
 }
 
-// target의 HP를 깎고 모두에게 알림. HP는 GameObject(ObjectInfo)에 있으므로 Monster가 아니라 GameObject로 받음
-//   0 아래로는 안 내려감. 죽음 처리는 호출한 쪽에서 (몬스터면 HandleSkill -> KillMonster)
+// target의 HP를 깎고(0 아래로는 안 내려감) 모두에게 알림. 죽음 처리는 호출한 쪽에서
+//   HP는 GameObject(ObjectInfo)에 있으므로 Monster가 아니라 GameObject로 받음
 void Room::ApplyDamage(GameObject& target, uint64 attackerId, int32 damage)
 {
 	Protocol::StatInfo* stat = target.GetStatInfo();
@@ -475,12 +489,12 @@ void Room::BroadcastHp(GameObject& target, int32 damage, uint64 attackerId)
 }
 
 // 몬스터 죽음: 방에서 빼고, 모두에게 알리고, 같은 스폰 줄로 리스폰 예약
-//   HandleSkill(틱 밖의 job)에서만 부름 -> _monsters를 도는 루프(UpdateMonsters) 도중에 지우는 일이 없음
-//   monster를 값(shared_ptr 복사)으로 받는 이유: 아래 erase로 맵의 shared_ptr이 사라진 뒤에도 GetSpawn()을 써야 해서
+//   HandleSkill(틱 밖의 job)에서만 부름 -> UpdateMonsters가 _monsters를 도는 도중에 지우는 일이 없음 (반복자 무효화 방지)
+//   monster를 값(shared_ptr 복사)으로 받음: erase로 맵의 shared_ptr이 사라진 뒤에도 GetSpawn()을 써야 해서
 void Room::KillMonster(MonsterRef monster, uint64 killerId)
 {
 	const uint64 monsterId = monster->GetObjectId();
-	_monsters.erase(monsterId);	// 이제 공격 대상(HandleSkill), 틱(UpdateMonsters), 새로 들어온 사람의 S_SPAWN 어디에도 안 나옴
+	_monsters.erase(monsterId);	// 이제 공격 대상, 틱, 새로 들어온 사람의 S_SPAWN 어디에도 안 나옴
 
 	Protocol::S_DIE pkt;
 	pkt.set_object_id(monsterId);
@@ -491,8 +505,7 @@ void Room::KillMonster(MonsterRef monster, uint64 killerId)
 	cout << "[Room] monster " << monsterId << " killed by " << killerId
 		<< ", respawn in " << spawn.respawnMs << "ms (spawn " << spawn.spawnId << ")" << endl;
 
-	// 같은 객체를 되살리지 않고 respawn_ms 뒤에 새로 만듦 (새 id)
-	//   spawn은 예약된 job(람다) 안에 복사되므로, 이 함수가 끝나고 monster가 지워져도 안전
+	// 같은 객체를 되살리지 않고 respawn_ms 뒤에 새 id로 만듦. spawn은 예약된 job 안에 복사돼서 monster가 지워져도 안전
 	DoTimer(static_cast<uint64>(spawn.respawnMs), &Room::SpawnMonster, spawn);
 }
 

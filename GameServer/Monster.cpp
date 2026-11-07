@@ -27,7 +27,7 @@ static const char* ToString(MonsterState state)
 	return "?";
 }
 
-// _data는 참조라서 나중에 대입할 수 없음 -> 초기화 리스트에서만 정할 수 있음 (멤버 선언 순서와 같은 순서로)
+// 참조 멤버(_data)는 초기화 리스트에서만 정할 수 있음 (멤버 선언 순서와 같은 순서로)
 Monster::Monster(const MonsterData& data, const MonsterSpawnData& spawn)
 	: GameObject(Protocol::OBJECT_TYPE_MONSTER), _data(data), _spawn(spawn)
 {
@@ -98,8 +98,7 @@ void Monster::UpdateChase(Room& room, float dt)
 	MoveTowards(targetPos->x(), targetPos->z(), _data.chaseSpeed, dt);
 }
 
-// 스폰으로 돌아감. 이 동안은 TryDetect를 안 해서 플레이어를 무시하고 (돌아가다 다시 붙는 것 방지),
-//   맞지도 않음 (Room::HandleSkill이 IsInvulnerable로 거절)
+// 스폰으로 돌아감. TryDetect를 안 해서 플레이어를 무시하고, 공격은 Room이 IsInvulnerable로 거절
 //   도착하면 HP를 다 채움 -> 끌고 가서 깎아 둔 HP로 이득을 볼 수 없음
 void Monster::UpdateReturn(Room& room, float dt)
 {
@@ -110,12 +109,12 @@ void Monster::UpdateReturn(Room& room, float dt)
 	if (stat->hp() < stat->max_hp())
 	{
 		stat->set_hp(stat->max_hp());
-		room.BroadcastHp(*this, 0, 0);	// 회복: damage 0, attacker 0. *this(Monster)를 GameObject&로 넘김
+		room.BroadcastHp(*this, 0, 0);	// 회복: damage 0, attacker 0
 	}
-	SetState(MonsterState::Idle);	// 도착 -> 다시 Seek
+	SetState(MonsterState::Idle);
 }
 
-// 맞았을 때 반응: 아직 아무도 안 쫓고 있으면(Idle/Patrol) 때린 사람을 쫓음 -> 감지 거리(8m) 밖에서 원거리로 맞아도 반응
+// 맞았을 때 (어그로): Idle/Patrol이면 때린 사람을 쫓음 -> 감지 거리 밖에서 원거리로 맞아도 반응
 //   Chase면 지금 타겟 유지 (여러 명이 때릴 때 이리저리 바꾸지 않게). Return은 무적이라 여기까지 안 옴
 void Monster::OnDamaged(uint64 attackerId)
 {

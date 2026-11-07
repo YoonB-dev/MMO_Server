@@ -5,7 +5,8 @@ import "Enum.proto";
 
 // 패킷에서 공통으로 쓰는 구조체 (Protocol.proto에서 import "Struct.proto";로 사용)
 
-// Unity 좌표계 기준 (y가 위쪽), yaw = y축 회전(도)
+// 서버 좌표계: y가 위쪽, yaw = y축 회전(도, +z = 0도 / +x = 90도), 단위 m
+//   (Unreal은 Z가 위쪽이고 cm라서 클라에서 변환)
 message PosInfo
 {
 	float x = 1;
@@ -20,12 +21,12 @@ message MoveInfo
 	PosInfo pos_info = 1;	// x, y, z, yaw
 	float dir_x = 2;		// 수평 이동 방향 (멈춰 있으면 0, 0)
 	float dir_z = 3;
-	float vel_y = 4;		// 세로 속도 (점프용, 지금은 항상 0)
+	float vel_y = 4;		// 세로 속도 (점프용, 현재 0)
 	MoveState state = 5;
 	float speed = 6;		// 수평 속도 (m/s, 멈춰 있으면 0). 클라는 (dir_x, dir_z) * speed로 다음 패킷까지 위치를 예측
 }
 
-// 전투 스탯. 지금은 HP만 (MP는 원거리 스킬 단계에서 추가)
+// 모두에게 보이는 전투 스탯 (HP바). MP는 본인만 보는 정보라 여기 없음 (S_ENTER_GAME, S_CHANGE_MP)
 message StatInfo
 {
 	int32 hp = 1;

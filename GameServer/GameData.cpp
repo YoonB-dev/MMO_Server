@@ -29,7 +29,7 @@ static bool LoadMonsters(DBConnection& db)
 	query.BindCol(8, row.loseRange);
 	query.BindCol(9, row.leashRange);
 	query.BindCol(10, row.returnSpeed);
-	query.BindCol(11, row.maxHp);	// 맨 뒤에 붙여서 기존 번호(0~10)는 그대로. 필드 순서와 SELECT 순서는 같을 필요 없음
+	query.BindCol(11, row.maxHp);
 
 	if (query.Execute() == false)
 		return false;	// 이유는 바로 위 [ODBC Error] (테이블이 없으면 doesn't exist)

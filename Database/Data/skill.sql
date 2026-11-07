@@ -6,10 +6,9 @@
 
 DROP TABLE IF EXISTS data_skill;
 
--- 기본 공격의 range_m은 몬스터가 멈추는 거리(data_monster.stop_range, 지금 1.5)보다 길어야 함
---   짧으면 쫓아와서 멈춘 몬스터를 영원히 못 때림 (테이블이 달라서 CHECK로는 못 막음)
--- 원거리(2번)의 range_m(10) + 서버 여유 1m은 data_monster.lose_range(12)보다 짧아야 함
---   길면 맞은 몬스터가 쫓기 시작하자마자 '너무 멀다'고 포기함 (이것도 테이블이 달라서 CHECK로는 못 막음)
+-- 테이블 사이 규칙 (테이블이 달라서 CHECK로는 못 막음)
+--   기본 공격 range_m > data_monster.stop_range: 짧으면 쫓아와서 멈춘 몬스터를 못 때림
+--   원거리 range_m + 서버 여유 1m < data_monster.lose_range: 길면 맞은 몬스터가 쫓기 시작하자마자 포기함
 CREATE TABLE data_skill (
     skill_id     INT          NOT NULL PRIMARY KEY,
     name         VARCHAR(32)  NOT NULL,            -- 사람이 보는 용도 (서버는 안 읽음)
