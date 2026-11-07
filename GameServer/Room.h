@@ -3,6 +3,7 @@
 
 namespace Protocol { class S_MOVE; }	// 참조로만 받으니 선언만 (Protocol.pb.h 전체를 include하지 않음)
 class MoveSendPolicy;
+struct MonsterSpawnData;	// 값으로 받지만, 선언만 할 때는 크기를 몰라도 됨 (정의하는 Room.cpp가 GameData.h를 include)
 
 // 게임 월드(전역 방 하나). 입장/퇴장/이동은 전부 DoAsync로 이 JobQueue에 넣어서 한 줄로 처리한다
 class Room : public JobQueue
@@ -30,7 +31,8 @@ class Room : public JobQueue
 	{
 		uint64	unknownSkill = 0;	// 표(data_skill)에 없는 skill_id
 		uint64	cooldown = 0;		// 쿨타임 중
-		uint64	badTarget = 0;		// 없는 id, 이미 없어진 몬스터, 플레이어 id
+		uint64	badTarget = 0;		// 없는 id, 이미 죽은 몬스터, 플레이어 id
+		uint64	invulnerable = 0;	// 돌아가는 중(Return)인 몬스터
 		uint64	outOfRange = 0;		// 서버 위치 기준 사거리 + 여유 밖
 	};
 
@@ -42,12 +44,15 @@ public:
 	void	HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 buttons, uint32 seq);
 	void	HandleSkill(PlayerRef player, int32 skillId, uint64 targetId);
 
-	// 몬스터 AI가 쓰는 조회 (Room JobQueue 안, 틱 도중에만 호출)
+	// 몬스터 AI가 쓰는 조회/알림 (Room JobQueue 안, 틱 도중에만 호출)
 	PlayerRef	FindPlayer(uint64 objectId);
 	PlayerRef	FindNearestPlayer(float x, float z, float range);
+	void		BroadcastHp(GameObject& target, int32 damage, uint64 attackerId);	// target의 지금 HP를 모두에게 (데미지, 회복 공통)
 
 private:
 	void	SpawnMonsters();
+	void	SpawnMonster(MonsterSpawnData spawn);				// 한 마리 생성 + S_SPAWN. 시작할 때와 리스폰 때 같이 씀
+	void	KillMonster(MonsterRef monster, uint64 killerId);	// 방에서 빼기 + S_DIE + 리스폰 예약
 	void	Tick();
 	void	LogStats(uint64 now);
 	void	ResetInputCounts();

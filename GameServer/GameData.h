@@ -27,6 +27,7 @@ struct MonsterSpawnData
 	int32	monsterId = 0;
 	float	x = 0.f;
 	float	z = 0.f;
+	int32	respawnMs = 0;	// 죽은 뒤 같은 자리에 다시 나오기까지 (ms)
 };
 
 // data_skill 한 줄: 스킬 하나의 고정 수치. 클라도 같은 skill_id 번호를 씀

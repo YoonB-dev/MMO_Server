@@ -13,5 +13,5 @@ Wait-LogCount -Name server -Pattern 'skill rejects' -Expected 1 -TimeoutSec 15
 
 Assert-LogContains -Name A -Pattern '\(monster hp=200\)'				# S_SPAWN에 HP가 실림
 Assert-LogCount -Name A -Pattern 'S_CHANGE_HP .* hp=190 ' -Expected 1	# 먼 몬스터가 잘못 맞았으면 2줄
-Assert-LogContains -Name server -Pattern 'unknown-skill 1, cooldown 1, bad-target 2, out-of-range 1'
+Assert-LogContains -Name server -Pattern 'unknown-skill 1, cooldown 1, bad-target 2, invulnerable 0, out-of-range 1'
 Assert-ServerAlive

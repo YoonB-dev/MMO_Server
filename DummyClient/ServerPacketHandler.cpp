@@ -66,6 +66,8 @@ static void TryAutoAttack(PacketSessionRef& session)
 	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
 	if (me->attackBurstSent == false)
 		return;		// 아직 몬스터 앞에 도착 전
+	if (me->monsterIds.count(me->chaseTargetId) == 0)
+		return;		// 타겟이 죽음 (S_DIE에서 지움) -> 더 안 때림
 	if (NowUs() - me->lastSkillUs < BASIC_ATTACK_COOLDOWN_US)
 		return;
 
@@ -378,5 +380,19 @@ bool Handle_S_CHANGE_HP(PacketSessionRef& session, Protocol::S_CHANGE_HP& pkt)
 	line << "S_CHANGE_HP id=" << pkt.object_id() << " hp=" << pkt.hp()
 		<< " damage=" << pkt.damage() << " attacker=" << pkt.attacker_id();
 	Log(ClientIdOf(session), line.str());
+	return true;
+}
+
+bool Handle_S_DIE(PacketSessionRef& session, Protocol::S_DIE& pkt)
+{
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+
+	ostringstream line;
+	line << "S_DIE id=" << pkt.object_id() << " killer=" << pkt.killer_id();
+	Log(me->GetClientId(), line.str());
+
+	// 서버에서 이미 사라진 id (진짜 클라는 죽는 모션 뒤에 액터를 지움)
+	//   chaseTargetId는 0으로 되돌리지 않음: 0이면 리스폰 몬스터의 S_SPAWN을 받을 때 추적 테스트가 처음부터 다시 시작됨
+	me->monsterIds.erase(pkt.object_id());
 	return true;
 }

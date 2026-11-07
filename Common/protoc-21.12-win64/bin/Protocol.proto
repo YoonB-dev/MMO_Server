@@ -80,6 +80,14 @@ message S_CHANGE_HP
 {
 	uint64 object_id = 1;	// 맞은 객체
 	int32 hp = 2;			// 바뀐 뒤 HP
-	int32 damage = 3;		// 이번에 깎인 양 (표시용)
-	uint64 attacker_id = 4;	// 때린 객체 (내가 때린 건지 구분용)
+	int32 damage = 3;		// 이번에 깎인 양 (표시용). 회복(복귀한 몬스터가 스폰에 도착)이면 0
+	uint64 attacker_id = 4;	// 때린 객체 (내가 때린 건지 구분용). 회복이면 0
+}
+
+// 서버 -> 클라(전체): 객체가 죽음 -> 죽는 모션 재생 후 클라가 직접 지움 (S_DESPAWN은 따로 안 옴)
+//   서버에서는 이미 사라진 상태: 이 id로 오는 공격은 거절되고, 리스폰은 새 id로 S_SPAWN
+message S_DIE
+{
+	uint64 object_id = 1;	// 죽은 객체
+	uint64 killer_id = 2;	// 마지막 공격을 한 객체
 }

@@ -19,7 +19,7 @@ public:
 	uint64	myId = 0;				// S_ENTER_GAME으로 받은 내 캐릭터 id
 	uint64	moveStartTick = 0;		// --move-test: 내가 처음 MOVING으로 찍힌 server_tick
 	bool	moveStopSent = false;	// --move-test: 멈춤 입력을 보냈는지
-	set<uint64>	monsterIds;			// S_SPAWN으로 받은 몬스터 id (S_MOVE에서 플레이어/몬스터 항목 구분용)
+	set<uint64>	monsterIds;			// S_SPAWN으로 받은 몬스터 id, S_DIE로 빠짐 (S_MOVE에서 플레이어/몬스터 항목 구분용)
 	float	myX = 0.f;				// 내 캐릭터의 마지막으로 받은 위치 (S_ENTER_GAME, 내 S_MOVE 항목)
 	float	myZ = 0.f;
 	uint64	chaseTargetId = 0;		// --chase-test: 쫓아갈 몬스터 id (0 = 아직 안 고름)

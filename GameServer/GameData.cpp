@@ -44,11 +44,12 @@ static bool LoadMonsterSpawns(DBConnection& db)
 {
 	MonsterSpawnData row;
 
-	DBBind<0, 4> query(db, L"SELECT spawn_id, monster_id, pos_x, pos_z FROM data_monster_spawn ORDER BY spawn_id");
+	DBBind<0, 5> query(db, L"SELECT spawn_id, monster_id, pos_x, pos_z, respawn_ms FROM data_monster_spawn ORDER BY spawn_id");
 	query.BindCol(0, row.spawnId);
 	query.BindCol(1, row.monsterId);
 	query.BindCol(2, row.x);
 	query.BindCol(3, row.z);
+	query.BindCol(4, row.respawnMs);
 
 	if (query.Execute() == false)
 		return false;
