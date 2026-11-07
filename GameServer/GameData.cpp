@@ -8,14 +8,15 @@
 //   파일끼리의 소멸 순서는 정해져 있지 않아서 GMemory가 먼저 지워진 뒤 이 컨테이너가 메모리를 돌려주려 할 수 있음
 static unordered_map<int32, MonsterData>	s_monsters;
 static vector<MonsterSpawnData>				s_spawns;
+static unordered_map<int32, SkillData>		s_skills;
 
 static bool LoadMonsters(DBConnection& db)
 {
 	MonsterData row;	// BindCol로 각 필드의 주소를 알려 두면, Fetch할 때마다 이번 줄의 값이 여기에 채워짐
 
-	DBBind<0, 11> query(db,
+	DBBind<0, 12> query(db,
 		L"SELECT monster_id, patrol_range, patrol_speed, idle_min_sec, idle_max_sec,"
-		L" detect_range, stop_range, chase_speed, lose_range, leash_range, return_speed"
+		L" detect_range, stop_range, chase_speed, lose_range, leash_range, return_speed, max_hp"
 		L" FROM data_monster");
 	query.BindCol(0, row.monsterId);
 	query.BindCol(1, row.patrolRange);
@@ -28,6 +29,7 @@ static bool LoadMonsters(DBConnection& db)
 	query.BindCol(8, row.loseRange);
 	query.BindCol(9, row.leashRange);
 	query.BindCol(10, row.returnSpeed);
+	query.BindCol(11, row.maxHp);	// 맨 뒤에 붙여서 기존 번호(0~10)는 그대로. 필드 순서와 SELECT 순서는 같을 필요 없음
 
 	if (query.Execute() == false)
 		return false;	// 이유는 바로 위 [ODBC Error] (테이블이 없으면 doesn't exist)
@@ -42,11 +44,12 @@ static bool LoadMonsterSpawns(DBConnection& db)
 {
 	MonsterSpawnData row;
 
-	DBBind<0, 4> query(db, L"SELECT spawn_id, monster_id, pos_x, pos_z FROM data_monster_spawn ORDER BY spawn_id");
+	DBBind<0, 5> query(db, L"SELECT spawn_id, monster_id, pos_x, pos_z, respawn_ms FROM data_monster_spawn ORDER BY spawn_id");
 	query.BindCol(0, row.spawnId);
 	query.BindCol(1, row.monsterId);
 	query.BindCol(2, row.x);
 	query.BindCol(3, row.z);
+	query.BindCol(4, row.respawnMs);
 
 	if (query.Execute() == false)
 		return false;
@@ -64,6 +67,26 @@ static bool LoadMonsterSpawns(DBConnection& db)
 	return true;
 }
 
+static bool LoadSkills(DBConnection& db)
+{
+	SkillData row;
+
+	DBBind<0, 5> query(db, L"SELECT skill_id, cooldown_ms, range_m, damage, mp_cost FROM data_skill");
+	query.BindCol(0, row.skillId);
+	query.BindCol(1, row.cooldownMs);
+	query.BindCol(2, row.range);
+	query.BindCol(3, row.damage);
+	query.BindCol(4, row.mpCost);
+
+	if (query.Execute() == false)
+		return false;
+
+	while (query.Fetch())
+		s_skills[row.skillId] = row;
+
+	return true;
+}
+
 bool LoadGameData()
 {
 	DBConnectionGuard db(GDBConnectionPool);
@@ -74,13 +97,14 @@ bool LoadGameData()
 	}
 
 	// 순서 중요: 스폰이 몬스터 종류를 확인하므로 종류 먼저
-	if (LoadMonsters(db) == false || LoadMonsterSpawns(db) == false)
+	if (LoadMonsters(db) == false || LoadMonsterSpawns(db) == false || LoadSkills(db) == false)
 	{
 		cout << "[GameData] failed to load (run Database/Setup-Database.ps1 to create data tables)" << endl;
 		return false;
 	}
 
-	cout << "[GameData] loaded " << s_monsters.size() << " monsters, " << s_spawns.size() << " spawns" << endl;
+	cout << "[GameData] loaded " << s_monsters.size() << " monsters, " << s_spawns.size() << " spawns, "
+		<< s_skills.size() << " skills" << endl;
 	return true;
 }
 
@@ -93,4 +117,10 @@ const MonsterData* FindMonsterData(int32 monsterId)
 const vector<MonsterSpawnData>& GetMonsterSpawns()
 {
 	return s_spawns;
+}
+
+const SkillData* FindSkillData(int32 skillId)
+{
+	auto it = s_skills.find(skillId);
+	return (it != s_skills.end()) ? &it->second : nullptr;
 }

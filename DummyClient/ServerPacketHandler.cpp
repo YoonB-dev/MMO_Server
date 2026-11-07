@@ -19,6 +19,61 @@ bool Handle_INVALID(PacketSessionRef& session, BYTE* buffer, int32 len)
 	return false;
 }
 
+static constexpr int32	BASIC_ATTACK_SKILL_ID = 1;			// Database/Data/skill.sql의 기본 공격 skill_id
+static constexpr int64	BASIC_ATTACK_COOLDOWN_US = 500'000;	// 같은 줄의 cooldown_ms(500)와 맞춰야 함 (DB를 바꾸면 여기도)
+
+static void SendSkill(PacketSessionRef& session, int32 skillId, uint64 targetId)
+{
+	Protocol::C_SKILL pkt;
+	pkt.set_skill_id(skillId);
+	pkt.set_target_id(targetId);
+	session->Send(ServerPacketHandler::MakeSendBuffer(pkt));
+}
+
+// 공격 검증 확인용 (Test/Scenarios/MonsterAttack.ps1)
+//   추적 테스트로 몬스터가 앞에 멈춘 뒤 한 번에 보냄. 서버는 거절 이유별 횟수를 10초 통계에 출력
+//   잘못된 요청을 정상 요청보다 먼저 보냄 -> 쿨타임이 안 걸린 상태에서 각자 자기 이유로 거절되게
+static void SendAttackTestBurst(PacketSessionRef& session)
+{
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+
+	// 다른 스폰의 몬스터 (스폰끼리 30m 넘게 떨어져 있어서 사거리 밖)
+	uint64 farMonsterId = 0;
+	for (uint64 id : me->monsterIds)
+	{
+		if (id != me->chaseTargetId)
+		{
+			farMonsterId = id;
+			break;
+		}
+	}
+
+	SendSkill(session, 99, me->chaseTargetId);						// reject: unknown-skill
+	SendSkill(session, BASIC_ATTACK_SKILL_ID, 999999);				// reject: bad-target (없는 id)
+	SendSkill(session, BASIC_ATTACK_SKILL_ID, me->myId);			// reject: bad-target (플레이어 id)
+	SendSkill(session, BASIC_ATTACK_SKILL_ID, farMonsterId);		// reject: out-of-range
+	SendSkill(session, BASIC_ATTACK_SKILL_ID, me->chaseTargetId);	// 통과 -> S_SKILL, S_CHANGE_HP hp=190
+	SendSkill(session, BASIC_ATTACK_SKILL_ID, me->chaseTargetId);	// reject: cooldown (0.5초 안에 또)
+
+	me->attackBurstSent = true;
+	me->lastSkillUs = NowUs();	// S_SKILL보다 S_PING이 먼저 도착해도 바로 또 보내지 않게
+}
+
+// --attack-test: 1초마다 오는 S_PING을 타이머 대신 써서 기본 공격
+//   진짜 클라처럼 내 S_SKILL을 받은 뒤 쿨타임(0.5초)이 지났을 때만 보냄 -> 서버에서 거절되면 안 됨
+static void TryAutoAttack(PacketSessionRef& session)
+{
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+	if (me->attackBurstSent == false)
+		return;		// 아직 몬스터 앞에 도착 전
+	if (me->monsterIds.count(me->chaseTargetId) == 0)
+		return;		// 타겟이 죽음 (S_DIE에서 지움) -> 더 안 때림
+	if (NowUs() - me->lastSkillUs < BASIC_ATTACK_COOLDOWN_US)
+		return;
+
+	SendSkill(session, BASIC_ATTACK_SKILL_ID, me->chaseTargetId);
+}
+
 bool Handle_S_PING(PacketSessionRef& session, Protocol::S_PING& pkt)
 {
 	double rttMs = (NowUs() - pkt.client_time_us()) / 1000.0;
@@ -26,6 +81,9 @@ bool Handle_S_PING(PacketSessionRef& session, Protocol::S_PING& pkt)
 	ostringstream line;
 	line << "S_PING RTT " << rttMs << "ms";
 	Log(ClientIdOf(session), line.str());
+
+	if (GAttackTest)
+		TryAutoAttack(session);
 	return true;
 }
 
@@ -58,7 +116,8 @@ static void SendInputTestBurst(PacketSessionRef& session)
 bool Handle_S_ENTER_GAME(PacketSessionRef& session, Protocol::S_ENTER_GAME& pkt)
 {
 	ostringstream line;
-	line << "S_ENTER_GAME success=" << pkt.success() << " myId=" << pkt.player().object_id();
+	line << "S_ENTER_GAME success=" << pkt.success() << " myId=" << pkt.player().object_id()
+		<< " mp=" << pkt.mp() << "/" << pkt.max_mp();
 	Log(ClientIdOf(session), line.str());
 
 	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
@@ -125,6 +184,14 @@ static void UpdateChaseTest(PacketSessionRef& session, uint64 serverTick, const 
 	const int32 prevState = me->lastTargetState;
 	me->lastTargetState = move.state();
 
+	// --ranged-test: 멈추고 쏘는 판단은 내 S_MOVE에서 (UpdateRangedTest). 여기서는 위치만 갱신하고, 걸어가는 중이면 다시 조준
+	if (GRangedTest)
+	{
+		if (me->chaseStopSent == false)
+			AimAtChaseTarget(session);
+		return;
+	}
+
 	const float dx = me->chaseTargetX - me->myX;
 	const float dz = me->chaseTargetZ - me->myZ;
 	const float dist = std::sqrt(dx * dx + dz * dz);
@@ -164,6 +231,10 @@ static void UpdateChaseTest(PacketSessionRef& session, uint64 serverTick, const 
 			// --flee-test: 몬스터 반대 방향 (-dx, -dz)로 계속 달림 -> 몬스터가 쫓다가 스폰에서 20m를 넘으면 포기하고 돌아감
 			if (GFleeTest)
 				SendMoveInput(session, -dx, -dz, ++me->chaseSeq);
+
+			// --attack-test: 몬스터가 바로 앞(1.5m)에 멈췄으니 검증용 공격 묶음
+			if (GAttackTest)
+				SendAttackTestBurst(session);
 		}
 		return;
 	}
@@ -173,6 +244,45 @@ static void UpdateChaseTest(PacketSessionRef& session, uint64 serverTick, const 
 	{
 		ostringstream line;
 		line << "TURN_SEND tick=" << serverTick << " target=" << entry.object_id() << " dist=" << dist;
+		Log(me->GetClientId(), line.str());
+	}
+}
+
+// 원거리 + 어그로 확인용 (Test/Scenarios/MonsterRanged.ps1, --ranged-test)
+//   가장 가까운 몬스터 쪽으로 걷다가 10m에서 멈춤 -> 멈춤이 서버에 적용되면 원거리 스킬을 두 번 연달아 보냄
+//     첫 번째: 통과 (몬스터는 감지 거리 8m 밖이라 아직 나를 모름 -> 맞고 쫓아와야 함)
+//     두 번째: 쿨타임(5초)으로 거절 -> MP가 한 번만 깎여야 함
+//   멈춤 판단을 내 S_MOVE에서 하는 이유: 서 있는(Idle) 몬스터는 S_MOVE가 안 와서, 몬스터 항목만 기다리면 계속 걸어감
+static constexpr int32	RANGED_SKILL_ID = 2;			// Database/Data/skill.sql의 원거리 스킬
+static constexpr float	RANGED_TEST_STOP_DIST = 10.f;	// 같은 줄의 range_m (감지 거리 8m 밖)
+
+static void UpdateRangedTest(PacketSessionRef& session, const Protocol::MoveEntry& entry)
+{
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+	const float dx = me->chaseTargetX - me->myX;
+	const float dz = me->chaseTargetZ - me->myZ;
+	const float dist = std::sqrt(dx * dx + dz * dz);
+
+	if (me->chaseStopSent == false)
+	{
+		if (dist <= RANGED_TEST_STOP_DIST)
+		{
+			SendMoveInput(session, 0.f, 0.f, ++me->chaseSeq);
+			me->chaseStopSent = true;
+		}
+		return;
+	}
+
+	// 내 항목이 IDLE이고 ack가 멈춤 입력 번호 = 서버에서 멈춘 위치가 확정됨
+	const bool stopped = (entry.move_info().state() == Protocol::MOVE_STATE_IDLE && entry.ack_seq() == me->chaseSeq);
+	if (me->rangedShotSent == false && stopped)
+	{
+		SendSkill(session, RANGED_SKILL_ID, me->chaseTargetId);	// 통과
+		SendSkill(session, RANGED_SKILL_ID, me->chaseTargetId);	// reject: cooldown
+		me->rangedShotSent = true;
+
+		ostringstream line;
+		line << "RANGED_TEST shot target=" << me->chaseTargetId << " dist=" << dist;
 		Log(me->GetClientId(), line.str());
 	}
 }
@@ -188,7 +298,7 @@ bool Handle_S_SPAWN(PacketSessionRef& session, Protocol::S_SPAWN& pkt)
 		line << " " << object.object_id();
 		if (object.object_type() == Protocol::OBJECT_TYPE_MONSTER)
 		{
-			line << "(monster)";
+			line << "(monster hp=" << object.stat_info().hp() << ")";	// stat_info가 실려 오는지 확인용
 			me->monsterIds.insert(object.object_id());
 		}
 	}
@@ -284,6 +394,8 @@ bool Handle_S_MOVE(PacketSessionRef& session, Protocol::S_MOVE& pkt)
 
 		if (GMoveTest)
 			UpdateMoveTest(session, pkt.server_tick(), entry);
+		if (GRangedTest)
+			UpdateRangedTest(session, entry);
 	}
 	return true;
 }
@@ -294,6 +406,51 @@ bool Handle_S_DESPAWN(PacketSessionRef& session, Protocol::S_DESPAWN& pkt)
 	line << "S_DESPAWN ids:";
 	for (uint64 objectId : pkt.object_ids())
 		line << " " << objectId;
+	Log(ClientIdOf(session), line.str());
+	return true;
+}
+
+bool Handle_S_SKILL(PacketSessionRef& session, Protocol::S_SKILL& pkt)
+{
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+
+	ostringstream line;
+	line << "S_SKILL caster=" << pkt.object_id() << " skill=" << pkt.skill_id() << " target=" << pkt.target_id();
+	Log(me->GetClientId(), line.str());
+
+	// 내 스킬이 확정됨 -> 클라 쪽 쿨타임 시작 (진짜 클라도 S_SKILL을 받은 시점부터 잼)
+	if (pkt.object_id() == me->myId)
+		me->lastSkillUs = NowUs();
+	return true;
+}
+
+bool Handle_S_CHANGE_HP(PacketSessionRef& session, Protocol::S_CHANGE_HP& pkt)
+{
+	ostringstream line;
+	line << "S_CHANGE_HP id=" << pkt.object_id() << " hp=" << pkt.hp()
+		<< " damage=" << pkt.damage() << " attacker=" << pkt.attacker_id();
+	Log(ClientIdOf(session), line.str());
+	return true;
+}
+
+bool Handle_S_DIE(PacketSessionRef& session, Protocol::S_DIE& pkt)
+{
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+
+	ostringstream line;
+	line << "S_DIE id=" << pkt.object_id() << " killer=" << pkt.killer_id();
+	Log(me->GetClientId(), line.str());
+
+	// 서버에서 이미 사라진 id (진짜 클라는 죽는 모션 뒤에 액터를 지움)
+	//   chaseTargetId는 0으로 되돌리지 않음: 0이면 리스폰 몬스터의 S_SPAWN을 받을 때 추적 테스트가 처음부터 다시 시작됨
+	me->monsterIds.erase(pkt.object_id());
+	return true;
+}
+
+bool Handle_S_CHANGE_MP(PacketSessionRef& session, Protocol::S_CHANGE_MP& pkt)
+{
+	ostringstream line;
+	line << "S_CHANGE_MP mp=" << pkt.mp();
 	Log(ClientIdOf(session), line.str());
 	return true;
 }

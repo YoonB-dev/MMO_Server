@@ -12,6 +12,7 @@ DROP TABLE IF EXISTS data_monster;
 CREATE TABLE data_monster (
     monster_id    INT          NOT NULL PRIMARY KEY,
     name          VARCHAR(32)  NOT NULL,            -- 사람이 보는 용도 (서버는 아직 안 읽음)
+    max_hp        INT          NOT NULL,            -- 스폰할 때 HP
     patrol_range  FLOAT        NOT NULL,            -- 스폰 기준 ±범위 안에서 배회
     patrol_speed  FLOAT        NOT NULL,
     idle_min_sec  FLOAT        NOT NULL,            -- 배회 사이 대기 시간
@@ -22,6 +23,7 @@ CREATE TABLE data_monster (
     lose_range    FLOAT        NOT NULL,            -- 타겟이 이보다 멀어지면 포기
     leash_range   FLOAT        NOT NULL,            -- 스폰에서 이보다 멀리 끌려오면 포기
     return_speed  FLOAT        NOT NULL,
+    CONSTRAINT chk_monster_hp    CHECK (max_hp > 0),
     CONSTRAINT chk_monster_idle  CHECK (idle_min_sec <= idle_max_sec),
     CONSTRAINT chk_monster_lose  CHECK (lose_range > detect_range),
     CONSTRAINT chk_monster_stop  CHECK (stop_range < detect_range),
@@ -29,21 +31,24 @@ CREATE TABLE data_monster (
 ) ENGINE=InnoDB;
 
 -- 어디에 어떤 몬스터가 나오나 (플레이어 입장 위치 (0, 0)에서 15m 넘게 떨어뜨림 -> 들어오자마자 쫓기지 않게)
+--   respawn_ms는 종류(data_monster)가 아니라 스폰 자리마다: 같은 슬라임이라도 자리에 따라 다르게 둘 수 있게
 CREATE TABLE data_monster_spawn (
     spawn_id    INT    NOT NULL PRIMARY KEY,
     monster_id  INT    NOT NULL,
     pos_x       FLOAT  NOT NULL,
     pos_z       FLOAT  NOT NULL,
+    respawn_ms  INT    NOT NULL,            -- 죽은 뒤 같은 자리에 다시 나오기까지 (ms)
+    CONSTRAINT chk_spawn_respawn CHECK (respawn_ms >= 1000),
     CONSTRAINT fk_spawn_monster FOREIGN KEY (monster_id) REFERENCES data_monster (monster_id)
 ) ENGINE=InnoDB;
 
 INSERT INTO data_monster
-    (monster_id, name, patrol_range, patrol_speed, idle_min_sec, idle_max_sec,
+    (monster_id, name, max_hp, patrol_range, patrol_speed, idle_min_sec, idle_max_sec,
      detect_range, stop_range, chase_speed, lose_range, leash_range, return_speed)
 VALUES
-    (1, 'Slime', 5, 2, 1, 3, 8, 1.5, 4, 12, 20, 6);
+    (1, 'Slime', 200, 5, 2, 1, 3, 8, 1.5, 4, 12, 20, 6);
 
-INSERT INTO data_monster_spawn (spawn_id, monster_id, pos_x, pos_z) VALUES
-    (1, 1, 15, 15),
-    (2, 1, -20, 10),
-    (3, 1, 0, -25);
+INSERT INTO data_monster_spawn (spawn_id, monster_id, pos_x, pos_z, respawn_ms) VALUES
+    (1, 1, 15, 15, 10000),
+    (2, 1, -20, 10, 10000),
+    (3, 1, 0, -25, 10000);

@@ -47,3 +47,15 @@ bool Handle_C_MOVE_INPUT(PacketSessionRef& session, Protocol::C_MOVE_INPUT& pkt)
 	GRoom->DoAsync(&Room::HandleMoveInput, player, pkt.dir_x(), pkt.dir_z(), pkt.buttons(), pkt.seq());
 	return true;
 }
+
+bool Handle_C_SKILL(PacketSessionRef& session, Protocol::C_SKILL& pkt)
+{
+	GameSessionRef gameSession = static_pointer_cast<GameSession>(session);
+	PlayerRef player = gameSession->GetPlayer();
+	if (player == nullptr)
+		return false;	// 아직 입장 안 한 세션의 요청
+
+	// 검사와 처리는 전부 Room의 줄에서 (쿨타임, 몬스터 위치/HP는 Room 안에서만 만짐)
+	GRoom->DoAsync(&Room::HandleSkill, player, pkt.skill_id(), pkt.target_id());
+	return true;
+}
