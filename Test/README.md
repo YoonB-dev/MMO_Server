@@ -46,6 +46,7 @@ powershell -ExecutionPolicy Bypass -File .\Test\Run-Test.ps1 -All
 | `MonsterAttack` | 위 추적 후 잘못된 공격 5개(없는 스킬, 없는 id, 플레이어 id, 먼 몬스터, 쿨타임) + 정상 1개 -> 정상만 통과(HP 200 -> 190), 서버 통계에 거절 이유별 횟수. 이후 1초마다 공격해서 170까지 |
 | `MonsterDeath` | 4명이 같은 몬스터를 때려서 HP 0 -> 모두 S_DIE 수신, 10초(respawn_ms) 뒤 같은 스폰 자리에 새 id로 리스폰(S_SPAWN hp=200) |
 | `MonsterReturnHeal` | 때린 뒤 도망쳐서 몬스터가 포기(leash)하면, 돌아가는 동안 공격이 무적으로 거절되고 스폰에 도착하면 HP 200으로 회복(S_CHANGE_HP damage=0) |
+| `MonsterRanged` | 몬스터에게서 10m(감지 거리 8m 밖)에 멈춰 원거리 스킬 -> 맞은 몬스터가 쫓아옴(aggro), HP 200 -> 170, MP 100 -> 90 -> 1초마다 +1. 바로 또 쏜 것은 쿨타임 거절이고 MP를 안 깎음 |
 
 ## 시나리오 추가
 
@@ -80,7 +81,7 @@ Assert-ServerAlive
 ### DummyClient 옵션
 
 ```
-DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test]
+DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test] [--ranged-test]
 ```
 
 | 옵션 | 기본값 | 설명 |
@@ -93,6 +94,7 @@ DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--monste
 | `--turn-test` | 끔 | `--chase-test` 후 옆으로 피하면서, 4틱 주기 밖에서 온 몬스터 이동마다 `TURN_SEND` |
 | `--flee-test` | 끔 | `--chase-test` 후 몬스터 반대 방향으로 계속 달림 (몬스터 복귀 확인용) |
 | `--attack-test` | 끔 | `--chase-test` 후 앞에 멈춘 몬스터에게 검증용 공격 묶음을 보내고, 이후 S_PING(1초)마다 기본 공격 (ping을 끄면 묶음만). 타겟이 죽으면(S_DIE) 멈춤 |
+| `--ranged-test` | 끔 | 가장 가까운 몬스터 쪽으로 걸어가 10m에서 멈추고, 멈춤이 적용되면 원거리 스킬(2번)을 두 번 연달아 보냄 (`RANGED_TEST shot`) |
 
 로그 형식은 `[Client <번호>] <내용>`이고, 한 줄씩 통째로 출력돼서 여러 세션이 동시에 찍어도 섞이지 않는다.
 새 동작(예: 이동)을 테스트하려면 DummyClient에 옵션을 추가하고 `-Arguments`로 넘긴다.

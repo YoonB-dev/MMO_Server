@@ -31,6 +31,7 @@ class Room : public JobQueue
 	{
 		uint64	unknownSkill = 0;	// 표(data_skill)에 없는 skill_id
 		uint64	cooldown = 0;		// 쿨타임 중
+		uint64	noMp = 0;			// MP 부족
 		uint64	badTarget = 0;		// 없는 id, 이미 죽은 몬스터, 플레이어 id
 		uint64	invulnerable = 0;	// 돌아가는 중(Return)인 몬스터
 		uint64	outOfRange = 0;		// 서버 위치 기준 사거리 + 여유 밖
@@ -56,6 +57,8 @@ private:
 	void	Tick();
 	void	LogStats(uint64 now);
 	void	ResetInputCounts();
+	void	UpdatePlayerStats();					// 1초마다 스탯 갱신 (지금은 자연 회복)
+	void	SendMp(const PlayerRef& player);		// S_CHANGE_MP를 본인에게
 	void	UpdatePlayers(Protocol::S_MOVE& pkt);
 	void	UpdateMonsters(Protocol::S_MOVE& pkt);
 	bool	ApplyInput(const PlayerRef& player);

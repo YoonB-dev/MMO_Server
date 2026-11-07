@@ -64,7 +64,10 @@ void Room::Tick()
 	const auto workStart = chrono::steady_clock::now();
 
 	if (_tick % TICKS_PER_SECOND == 0)
+	{
 		ResetInputCounts();
+		UpdatePlayerStats();
+	}
 
 	// 이번 틱에 바뀐 이동을 한 패킷에 모아서 전체(본인 포함)에 전송
 	//   플레이어 먼저 -> 몬스터는 이번 틱에 움직인 플레이어 위치를 보고 판단
@@ -109,10 +112,10 @@ void Room::LogStats(uint64 now)
 
 	// 스킬 거절: 이 구간에 하나라도 있었을 때만 출력 (정상 플레이에서는 거의 0)
 	const SkillRejectStats& r = _skillRejects;
-	if (r.unknownSkill + r.cooldown + r.badTarget + r.invulnerable + r.outOfRange > 0)
+	if (r.unknownSkill + r.cooldown + r.noMp + r.badTarget + r.invulnerable + r.outOfRange > 0)
 	{
 		cout << "[Room] skill rejects: unknown-skill " << r.unknownSkill << ", cooldown " << r.cooldown
-			<< ", bad-target " << r.badTarget << ", invulnerable " << r.invulnerable
+			<< ", no-mp " << r.noMp << ", bad-target " << r.badTarget << ", invulnerable " << r.invulnerable
 			<< ", out-of-range " << r.outOfRange << endl;
 	}
 
@@ -133,6 +136,8 @@ void Room::Enter(PlayerRef player)
 		Protocol::S_ENTER_GAME pkt;
 		pkt.set_success(true);
 		*pkt.mutable_player() = player->GetObjectInfo();
+		pkt.set_mp(player->mp);				// MP는 본인만 보는 정보라 ObjectInfo 밖에 따로
+		pkt.set_max_mp(Player::MAX_MP);
 		SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
 	}
 
@@ -231,7 +236,15 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 		return;
 	}
 
-	// 3. 타겟: 지금 방에 있는 몬스터인가 (없는 id, 플레이어 id는 여기서 걸림)
+	// 3. MP: 남은 MP가 이 스킬 비용보다 적으면 거절 (기본 공격은 비용 0이라 항상 통과)
+	//    여기까지(스킬, 쿨타임, MP)가 '나 자신'의 상태 검사, 아래(타겟, 무적, 거리)가 '타겟' 검사
+	if (player->mp < skill->mpCost)
+	{
+		_skillRejects.noMp++;
+		return;
+	}
+
+	// 4. 타겟: 지금 방에 있는 몬스터인가 (없는 id, 플레이어 id는 여기서 걸림)
 	auto it = _monsters.find(targetId);
 	if (it == _monsters.end())
 	{
@@ -240,14 +253,14 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 	}
 	MonsterRef target = it->second;	// shared_ptr 복사 -> 이 함수가 끝날 때까지 몬스터가 살아 있음
 
-	// 4. 돌아가는 중(Return)인 몬스터는 무적: 끌고 가서 반격 없이 때리는 것 방지
+	// 5. 돌아가는 중(Return)인 몬스터는 무적: 끌고 가서 반격 없이 때리는 것 방지
 	if (target->IsInvulnerable())
 	{
 		_skillRejects.invulnerable++;
 		return;
 	}
 
-	// 5. 거리: 클라가 본 위치가 아니라 서버가 가진 위치로 잼 (+ 지연 여유)
+	// 6. 거리: 클라가 본 위치가 아니라 서버가 가진 위치로 잼 (+ 지연 여유)
 	Protocol::PosInfo* myPos = player->GetPosInfo();
 	const Protocol::PosInfo* targetPos = target->GetPosInfo();
 	const float dx = targetPos->x() - myPos->x();
@@ -263,6 +276,13 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 	// ms -> 틱은 올림: 50ms 단위가 아니어도 설계값보다 짧아지지 않게 (500ms -> 10틱, 520ms -> 11틱)
 	const uint64 cooldownTicks = (static_cast<uint64>(skill->cooldownMs) + TICK_INTERVAL_MS - 1) / TICK_INTERVAL_MS;
 	readyTick = _tick + cooldownTicks;
+
+	// MP는 모든 검사를 통과한 뒤에 깎음 -> 거절된 요청은 MP를 안 씀
+	if (skill->mpCost > 0)
+	{
+		player->mp -= skill->mpCost;
+		SendMp(player);
+	}
 
 	// 멈춰 있을 때만 타겟 쪽으로 돌아봄
 	//   이동 중에 바꾸면 이후 S_MOVE에 '옆으로 달리면서 몸은 타겟을 보는' yaw가 실림 -> 이동 중엔 클라가 상체만 돌림
@@ -283,6 +303,8 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 	// HP가 0이 됐으면 죽음 처리. ApplyDamage는 GameObject용이라 몬스터만의 처리(맵에서 빼기, 리스폰)는 여기서
 	if (target->GetStatInfo()->hp() == 0)
 		KillMonster(target, player->GetObjectId());
+	else
+		target->OnDamaged(player->GetObjectId());	// 살아 있으면 반응 (아무도 안 쫓고 있었으면 때린 사람을 쫓음)
 }
 
 PlayerRef Room::FindPlayer(uint64 objectId)
@@ -316,6 +338,29 @@ void Room::ResetInputCounts()
 {
 	for (auto& [id, player] : _players)
 		player->inputCount = 0;
+}
+
+// 1초마다 플레이어 스탯 갱신. 지금은 자연 회복만 (나중에 버프/지속 효과처럼 '1초마다' 하는 처리도 여기에)
+//   계산은 Player::Regen, 누구에게 보낼지는 여기서 정함
+//   _players를 도는 중에 BroadcastHp도 _players를 돌지만, 둘 다 읽기만 해서 괜찮음 (넣거나 빼는 것만 안 됨)
+void Room::UpdatePlayerStats()
+{
+	for (auto& [id, player] : _players)
+	{
+		const Player::RegenResult result = player->Regen();
+		if (result.hpChanged)
+			BroadcastHp(*player, 0, 0);	// HP는 모두가 보는 정보 -> 전체 (몬스터 복귀 회복과 같은 모양)
+		if (result.mpChanged)
+			SendMp(player);				// MP는 본인만
+	}
+}
+
+// MP는 본인만 보는 정보 -> Broadcast가 아니라 SendTo
+void Room::SendMp(const PlayerRef& player)
+{
+	Protocol::S_CHANGE_MP pkt;
+	pkt.set_mp(player->mp);
+	SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
 }
 
 void Room::UpdatePlayers(Protocol::S_MOVE& pkt)

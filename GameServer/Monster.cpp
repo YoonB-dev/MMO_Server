@@ -115,6 +115,18 @@ void Monster::UpdateReturn(Room& room, float dt)
 	SetState(MonsterState::Idle);	// 도착 -> 다시 Seek
 }
 
+// 맞았을 때 반응: 아직 아무도 안 쫓고 있으면(Idle/Patrol) 때린 사람을 쫓음 -> 감지 거리(8m) 밖에서 원거리로 맞아도 반응
+//   Chase면 지금 타겟 유지 (여러 명이 때릴 때 이리저리 바꾸지 않게). Return은 무적이라 여기까지 안 옴
+void Monster::OnDamaged(uint64 attackerId)
+{
+	if (_state != MonsterState::Idle && _state != MonsterState::Patrol)
+		return;
+
+	cout << "[Monster " << GetObjectId() << "] aggro on " << attackerId << endl;
+	_targetId = attackerId;
+	SetState(MonsterState::Chase);	// 다음 틱 UpdateChase가 FindPlayer(_targetId)로 쫓기 시작
+}
+
 // Idle/Patrol 공통: 감지 거리 안의 가장 가까운 플레이어를 타겟으로 Chase 시작. 찾았으면 true
 bool Monster::TryDetect(Room& room)
 {

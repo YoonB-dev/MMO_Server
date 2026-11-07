@@ -116,7 +116,8 @@ static void SendInputTestBurst(PacketSessionRef& session)
 bool Handle_S_ENTER_GAME(PacketSessionRef& session, Protocol::S_ENTER_GAME& pkt)
 {
 	ostringstream line;
-	line << "S_ENTER_GAME success=" << pkt.success() << " myId=" << pkt.player().object_id();
+	line << "S_ENTER_GAME success=" << pkt.success() << " myId=" << pkt.player().object_id()
+		<< " mp=" << pkt.mp() << "/" << pkt.max_mp();
 	Log(ClientIdOf(session), line.str());
 
 	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
@@ -183,6 +184,14 @@ static void UpdateChaseTest(PacketSessionRef& session, uint64 serverTick, const 
 	const int32 prevState = me->lastTargetState;
 	me->lastTargetState = move.state();
 
+	// --ranged-test: 멈추고 쏘는 판단은 내 S_MOVE에서 (UpdateRangedTest). 여기서는 위치만 갱신하고, 걸어가는 중이면 다시 조준
+	if (GRangedTest)
+	{
+		if (me->chaseStopSent == false)
+			AimAtChaseTarget(session);
+		return;
+	}
+
 	const float dx = me->chaseTargetX - me->myX;
 	const float dz = me->chaseTargetZ - me->myZ;
 	const float dist = std::sqrt(dx * dx + dz * dz);
@@ -235,6 +244,45 @@ static void UpdateChaseTest(PacketSessionRef& session, uint64 serverTick, const 
 	{
 		ostringstream line;
 		line << "TURN_SEND tick=" << serverTick << " target=" << entry.object_id() << " dist=" << dist;
+		Log(me->GetClientId(), line.str());
+	}
+}
+
+// 원거리 + 어그로 확인용 (Test/Scenarios/MonsterRanged.ps1, --ranged-test)
+//   가장 가까운 몬스터 쪽으로 걷다가 10m에서 멈춤 -> 멈춤이 서버에 적용되면 원거리 스킬을 두 번 연달아 보냄
+//     첫 번째: 통과 (몬스터는 감지 거리 8m 밖이라 아직 나를 모름 -> 맞고 쫓아와야 함)
+//     두 번째: 쿨타임(5초)으로 거절 -> MP가 한 번만 깎여야 함
+//   멈춤 판단을 내 S_MOVE에서 하는 이유: 서 있는(Idle) 몬스터는 S_MOVE가 안 와서, 몬스터 항목만 기다리면 계속 걸어감
+static constexpr int32	RANGED_SKILL_ID = 2;			// Database/Data/skill.sql의 원거리 스킬
+static constexpr float	RANGED_TEST_STOP_DIST = 10.f;	// 같은 줄의 range_m (감지 거리 8m 밖)
+
+static void UpdateRangedTest(PacketSessionRef& session, const Protocol::MoveEntry& entry)
+{
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+	const float dx = me->chaseTargetX - me->myX;
+	const float dz = me->chaseTargetZ - me->myZ;
+	const float dist = std::sqrt(dx * dx + dz * dz);
+
+	if (me->chaseStopSent == false)
+	{
+		if (dist <= RANGED_TEST_STOP_DIST)
+		{
+			SendMoveInput(session, 0.f, 0.f, ++me->chaseSeq);
+			me->chaseStopSent = true;
+		}
+		return;
+	}
+
+	// 내 항목이 IDLE이고 ack가 멈춤 입력 번호 = 서버에서 멈춘 위치가 확정됨
+	const bool stopped = (entry.move_info().state() == Protocol::MOVE_STATE_IDLE && entry.ack_seq() == me->chaseSeq);
+	if (me->rangedShotSent == false && stopped)
+	{
+		SendSkill(session, RANGED_SKILL_ID, me->chaseTargetId);	// 통과
+		SendSkill(session, RANGED_SKILL_ID, me->chaseTargetId);	// reject: cooldown
+		me->rangedShotSent = true;
+
+		ostringstream line;
+		line << "RANGED_TEST shot target=" << me->chaseTargetId << " dist=" << dist;
 		Log(me->GetClientId(), line.str());
 	}
 }
@@ -346,6 +394,8 @@ bool Handle_S_MOVE(PacketSessionRef& session, Protocol::S_MOVE& pkt)
 
 		if (GMoveTest)
 			UpdateMoveTest(session, pkt.server_tick(), entry);
+		if (GRangedTest)
+			UpdateRangedTest(session, entry);
 	}
 	return true;
 }
@@ -394,5 +444,13 @@ bool Handle_S_DIE(PacketSessionRef& session, Protocol::S_DIE& pkt)
 	// 서버에서 이미 사라진 id (진짜 클라는 죽는 모션 뒤에 액터를 지움)
 	//   chaseTargetId는 0으로 되돌리지 않음: 0이면 리스폰 몬스터의 S_SPAWN을 받을 때 추적 테스트가 처음부터 다시 시작됨
 	me->monsterIds.erase(pkt.object_id());
+	return true;
+}
+
+bool Handle_S_CHANGE_MP(PacketSessionRef& session, Protocol::S_CHANGE_MP& pkt)
+{
+	ostringstream line;
+	line << "S_CHANGE_MP mp=" << pkt.mp();
+	Log(ClientIdOf(session), line.str());
 	return true;
 }

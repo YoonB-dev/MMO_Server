@@ -29,6 +29,9 @@ public:
 	bool					IsInvulnerable() const { return _state == MonsterState::Return; }	// 돌아가는 중에는 무적
 	const MonsterSpawnData&	GetSpawn() const { return _spawn; }	// 죽었을 때 같은 스폰 줄로 리스폰 예약
 
+	// Room이 알려 주는 이벤트
+	void	OnDamaged(uint64 attackerId);	// 맞았을 때 (살아 있을 때만, Room::HandleSkill에서)
+
 public:
 	// Room JobQueue 안에서만 접근 -> 락 없음
 	Protocol::MoveInfo	lastSentMove;	// 마지막으로 S_MOVE에 넣은 이동 (전송 정책의 비교 기준)

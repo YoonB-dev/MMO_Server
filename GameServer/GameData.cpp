@@ -71,11 +71,12 @@ static bool LoadSkills(DBConnection& db)
 {
 	SkillData row;
 
-	DBBind<0, 4> query(db, L"SELECT skill_id, cooldown_ms, range_m, damage FROM data_skill");
+	DBBind<0, 5> query(db, L"SELECT skill_id, cooldown_ms, range_m, damage, mp_cost FROM data_skill");
 	query.BindCol(0, row.skillId);
 	query.BindCol(1, row.cooldownMs);
 	query.BindCol(2, row.range);
 	query.BindCol(3, row.damage);
+	query.BindCol(4, row.mpCost);
 
 	if (query.Execute() == false)
 		return false;

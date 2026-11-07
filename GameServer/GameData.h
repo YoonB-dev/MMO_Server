@@ -37,6 +37,7 @@ struct SkillData
 	int32	cooldownMs = 0;	// 다시 쓸 수 있을 때까지 (ms). Room이 틱 수로 바꿔서 씀
 	float	range = 0.f;	// 사거리 (m). 서버 위치 기준, Room이 지연 여유를 더해서 검사
 	int32	damage = 0;
+	int32	mpCost = 0;		// 쓸 때 드는 MP
 };
 
 bool							LoadGameData();						// main에서 DB 접속 후 한 번. 실패하면 이유를 찍고 false
