@@ -7,8 +7,10 @@
 DROP TABLE IF EXISTS data_monster_spawn;
 DROP TABLE IF EXISTS data_monster;
 
--- 몬스터 종류별 수치 (HP, AI)
+-- 몬스터 종류별 수치 (HP, AI, 공격 스킬)
 -- lose_range가 detect_range보다 커야 경계에서 Chase/포기가 왔다 갔다 하지 않음
+-- skill_id는 data_skill을 가리키지만 FK는 걸지 않음: Setup이 파일을 이름순으로 실행해서 이 파일이 skill.sql보다 먼저 돎
+--   (FK가 있으면 처음엔 data_skill이 없어서, 다시 실행할 땐 skill.sql의 DROP이 참조 중이라 실패) -> 서버가 로드할 때 확인
 CREATE TABLE data_monster (
     monster_id    INT          NOT NULL PRIMARY KEY,
     name          VARCHAR(32)  NOT NULL,            -- 사람이 보는 용도 (서버는 안 읽음)
@@ -23,6 +25,7 @@ CREATE TABLE data_monster (
     lose_range    FLOAT        NOT NULL,            -- 타겟이 이보다 멀어지면 포기
     leash_range   FLOAT        NOT NULL,            -- 스폰에서 이보다 멀리 끌려오면 포기
     return_speed  FLOAT        NOT NULL,
+    skill_id      INT          NOT NULL,            -- 공격 스킬 (data_skill, 101번부터)
     CONSTRAINT chk_monster_hp    CHECK (max_hp > 0),
     CONSTRAINT chk_monster_idle  CHECK (idle_min_sec <= idle_max_sec),
     CONSTRAINT chk_monster_lose  CHECK (lose_range > detect_range),
@@ -44,9 +47,9 @@ CREATE TABLE data_monster_spawn (
 
 INSERT INTO data_monster
     (monster_id, name, max_hp, patrol_range, patrol_speed, idle_min_sec, idle_max_sec,
-     detect_range, stop_range, chase_speed, lose_range, leash_range, return_speed)
+     detect_range, stop_range, chase_speed, lose_range, leash_range, return_speed, skill_id)
 VALUES
-    (1, 'Slime', 200, 5, 2, 1, 3, 8, 1.5, 4, 12, 20, 6);
+    (1, 'Slime', 200, 5, 2, 1, 3, 8, 1.5, 4, 12, 20, 6, 101);
 
 INSERT INTO data_monster_spawn (spawn_id, monster_id, pos_x, pos_z, respawn_ms) VALUES
     (1, 1, 15, 15, 10000),

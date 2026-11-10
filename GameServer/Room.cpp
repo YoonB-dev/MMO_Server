@@ -22,6 +22,7 @@
 // 전투 (C_SKILL -> HandleSkill)
 //   검사 6개 (타겟 문제는 대상 필수 스킬이면 거절, 아니면 빗나감) -> 확정(쿨타임, MP) -> S_SKILL
 //   -> 빗나감이면 끝, 맞았으면 ApplyDamage(S_CHANGE_HP)
+//   몬스터 공격은 AI가 정함 (Monster::UpdateChase -> StartAttack: BroadcastSkill로 예고 -> UpdateAttack: 판정 -> ApplyDamage)
 //   -> HP 0이면 KillMonster (S_DIE, 리스폰 예약), 아니면 Monster::OnDamaged (어그로)
 
 // main에서 생성 (전역 변수 초기화 시점에는 ServerCore의 GMemory가 아직 없을 수 있음)
@@ -247,9 +248,9 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 	if (_players.find(player->GetObjectId()) == _players.end())
 		return;
 
-	// 1. 스킬 존재 (data_skill)
+	// 1. 스킬 존재 (data_skill). 몬스터 스킬(101번부터)은 플레이어가 못 씀
 	const SkillData* skill = FindSkillData(skillId);
-	if (skill == nullptr)
+	if (skill == nullptr || skillId >= MONSTER_SKILL_ID_BEGIN)
 	{
 		_skillRejects.unknownSkill++;
 		return;
@@ -307,14 +308,7 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 	}
 
 	// 모두에게: 누가 무슨 스킬을 어느 방향으로 썼고, 누가 맞았나 (빗나감이면 target 0)
-	{
-		Protocol::S_SKILL pkt;
-		pkt.set_object_id(player->GetObjectId());
-		pkt.set_skill_id(skillId);
-		pkt.set_target_id(target != nullptr ? target->GetObjectId() : 0);
-		pkt.set_yaw(myPos->yaw());
-		Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
-	}
+	BroadcastSkill(*player, *skill, target != nullptr ? target->GetObjectId() : 0);
 
 	if (target == nullptr)
 		return;		// 빗나감: 데미지 없음
@@ -513,8 +507,8 @@ void Room::RejectInput(PlayerRef player, uint32 seq, const char* reason)
 		<< ", seq " << seq << ", reason " << reason << endl;
 }
 
-// target의 HP를 깎고(0 아래로는 안 내려감) 모두에게 알림. 죽음 처리는 호출한 쪽에서
-//   HP는 GameObject(ObjectInfo)에 있으므로 Monster가 아니라 GameObject로 받음
+// target의 HP를 깎고(0 아래로는 안 내려감) 모두에게 알림. 죽음 처리는 호출한 쪽에서 (플레이어 죽음은 아직 없음)
+//   HP는 GameObject(ObjectInfo)에 있으므로 Monster / Player 구분 없이 GameObject로 받음
 void Room::ApplyDamage(GameObject& target, uint64 attackerId, int32 damage)
 {
 	Protocol::StatInfo* stat = target.GetStatInfo();
@@ -524,6 +518,21 @@ void Room::ApplyDamage(GameObject& target, uint64 attackerId, int32 damage)
 	stat->set_hp(hp);
 
 	BroadcastHp(target, damage, attackerId);
+}
+
+// S_SKILL을 모두에게. 플레이어 스킬(HandleSkill)과 몬스터 예고 공격(Monster::StartAttack) 공통
+//   yaw는 시전자의 지금 방향. cast_ms, range, hit_angle은 클라가 예고 범위를 그리는 데 씀 (즉시 스킬은 cast 0)
+void Room::BroadcastSkill(GameObject& caster, const SkillData& skill, uint64 targetId)
+{
+	Protocol::S_SKILL pkt;
+	pkt.set_object_id(caster.GetObjectId());
+	pkt.set_skill_id(skill.skillId);
+	pkt.set_target_id(targetId);
+	pkt.set_yaw(caster.GetPosInfo()->yaw());
+	pkt.set_cast_ms(skill.castMs);
+	pkt.set_range(skill.range);
+	pkt.set_hit_angle(skill.hitAngleDeg);
+	Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
 }
 
 // target의 지금 HP를 모두에게. 데미지(ApplyDamage)와 회복(Monster가 스폰에 도착) 공통

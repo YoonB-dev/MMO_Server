@@ -6,13 +6,15 @@
 //
 //   Idle --대기 시간 끝--> Patrol --목적지 도착--> Idle
 //   Idle / Patrol --감지 거리 안에 플레이어, 또는 맞음(OnDamaged)--> Chase
-//   Chase --타겟이 나감(left) / 멀어짐(lost) / 스폰에서 너무 멂(leash)--> Return
+//   Chase --사거리 안 + 쿨타임 끝--> Attack (멈춤, 방향 고정, 예고) --cast_ms 뒤 부채꼴 판정--> Chase
+//   Chase / Attack --타겟이 나감(left) / 멀어짐(lost) / 스폰에서 너무 멂(leash)--> Return
 //   Return --스폰 도착, HP 회복--> Idle          * Return 중에는 플레이어를 무시하고 무적
 enum class MonsterState
 {
 	Idle,		// 제자리 대기
 	Patrol,		// 스폰 주변 랜덤 지점으로 걸어감
 	Chase,		// 타겟 플레이어를 쫓아감
+	Attack,		// 예고 중 (제자리, 방향 고정). 끝나면 판정
 	Return,		// 스폰으로 빠르게 돌아감 (플레이어 무시 + 무적, 도착하면 HP 회복)
 };
 
@@ -20,6 +22,7 @@ enum class MonsterState
 class Monster : public GameObject
 {
 	static constexpr float	RAD_TO_DEG = 57.2957795f;	// Room.h와 같은 값
+	static constexpr float	DEG_TO_RAD = 0.0174532925f;	// 도 -> 라디안 (π / 180)
 
 public:
 	// data: 이 몬스터 종류의 수치 (GameData가 들고 있는 원본), spawn: 어느 스폰 줄에서 나왔나 (복사해서 보관)
@@ -44,7 +47,10 @@ private:
 	void	UpdateIdle(Room& room, float dt);
 	void	UpdatePatrol(Room& room, float dt);
 	void	UpdateChase(Room& room, float dt);
+	void	UpdateAttack(Room& room, float dt);
 	void	UpdateReturn(Room& room, float dt);	// 도착하면 HP 회복을 알려야 해서 Room을 받음 (플레이어는 여전히 안 찾음)
+	void	StartAttack(Room& room, float dx, float dz);	// (dx, dz): 타겟 쪽 방향 -> 판정 방향으로 고정
+	bool	IsInHitArea(const Protocol::PosInfo& targetPos);	// 고정 방향 부채꼴 안인지
 	bool	TryDetect(Room& room);
 	void	GiveUpChase(const char* reason);
 	void	SetState(MonsterState next);
@@ -61,4 +67,8 @@ private:
 	float			_destZ = 0.f;
 	float			_idleTime = 0.f;	// Idle 남은 시간(초). 0에서 시작 -> 첫 틱에 바로 배회 시작
 	uint64			_targetId = 0;		// Chase 대상 플레이어 id (0 = 없음)
+	float			_attackCooldown = 0.f;	// 다음 공격까지 남은 시간(초). 상태와 상관없이 매 틱 줄어듦
+	float			_castRemaining = 0.f;	// Attack: 예고 남은 시간(초)
+	float			_castDirX = 0.f;		// Attack: 예고 시작 때 고정한 방향 (단위 벡터) -> 시전 중 타겟이 움직여도 안 따라 돎
+	float			_castDirZ = 1.f;
 };

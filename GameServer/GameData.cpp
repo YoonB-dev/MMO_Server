@@ -14,9 +14,9 @@ static bool LoadMonsters(DBConnection& db)
 {
 	MonsterData row;	// BindCol로 각 필드의 주소를 알려 두면, Fetch할 때마다 이번 줄의 값이 여기에 채워짐
 
-	DBBind<0, 12> query(db,
+	DBBind<0, 13> query(db,
 		L"SELECT monster_id, patrol_range, patrol_speed, idle_min_sec, idle_max_sec,"
-		L" detect_range, stop_range, chase_speed, lose_range, leash_range, return_speed, max_hp"
+		L" detect_range, stop_range, chase_speed, lose_range, leash_range, return_speed, max_hp, skill_id"
 		L" FROM data_monster");
 	query.BindCol(0, row.monsterId);
 	query.BindCol(1, row.patrolRange);
@@ -30,12 +30,22 @@ static bool LoadMonsters(DBConnection& db)
 	query.BindCol(9, row.leashRange);
 	query.BindCol(10, row.returnSpeed);
 	query.BindCol(11, row.maxHp);
+	query.BindCol(12, row.skillId);
 
 	if (query.Execute() == false)
 		return false;	// 이유는 바로 위 [ODBC Error] (테이블이 없으면 doesn't exist)
 
 	while (query.Fetch())
+	{
+		// 테이블끼리 FK가 없어서(monster.sql 주석) 서버가 확인. 찾은 스킬은 포인터로 연결 -> Monster가 매번 찾지 않음
+		row.skill = FindSkillData(row.skillId);
+		if (row.skill == nullptr)
+		{
+			cout << "[GameData] monster " << row.monsterId << ": unknown skill_id " << row.skillId << endl;
+			return false;
+		}
 		s_monsters[row.monsterId] = row;	// 복사해서 저장 (row는 다음 Fetch에서 덮어써짐)
+	}
 
 	return true;
 }
@@ -72,13 +82,16 @@ static bool LoadSkills(DBConnection& db)
 	SkillData row;
 	int32 requiresTarget = 0;	// TINYINT(0/1). DBBind에 bool 바인딩이 없어서 int32로 받아 bool로 바꿈
 
-	DBBind<0, 6> query(db, L"SELECT skill_id, cooldown_ms, range_m, damage, mp_cost, requires_target FROM data_skill");
+	DBBind<0, 8> query(db,
+		L"SELECT skill_id, cooldown_ms, range_m, damage, mp_cost, requires_target, cast_ms, hit_angle_deg FROM data_skill");
 	query.BindCol(0, row.skillId);
 	query.BindCol(1, row.cooldownMs);
 	query.BindCol(2, row.range);
 	query.BindCol(3, row.damage);
 	query.BindCol(4, row.mpCost);
 	query.BindCol(5, requiresTarget);
+	query.BindCol(6, row.castMs);
+	query.BindCol(7, row.hitAngleDeg);
 
 	if (query.Execute() == false)
 		return false;
@@ -101,8 +114,8 @@ bool LoadGameData()
 		return false;
 	}
 
-	// 순서 중요: 스폰이 몬스터 종류를 확인하므로 종류 먼저
-	if (LoadMonsters(db) == false || LoadMonsterSpawns(db) == false || LoadSkills(db) == false)
+	// 순서 중요: 몬스터가 스킬을, 스폰이 몬스터 종류를 확인하므로 스킬 -> 몬스터 -> 스폰
+	if (LoadSkills(db) == false || LoadMonsters(db) == false || LoadMonsterSpawns(db) == false)
 	{
 		cout << "[GameData] failed to load (run Database/Setup-Database.ps1 to create data tables)" << endl;
 		return false;

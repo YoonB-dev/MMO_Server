@@ -22,6 +22,7 @@ static const char* ToString(MonsterState state)
 	case MonsterState::Idle:	return "Idle";
 	case MonsterState::Patrol:	return "Patrol";
 	case MonsterState::Chase:	return "Chase";
+	case MonsterState::Attack:	return "Attack";
 	case MonsterState::Return:	return "Return";
 	}
 	return "?";
@@ -39,11 +40,15 @@ Monster::Monster(const MonsterData& data, const MonsterSpawnData& spawn)
 
 void Monster::Update(Room& room, float dt)
 {
+	if (_attackCooldown > 0.f)
+		_attackCooldown -= dt;
+
 	switch (_state)
 	{
 	case MonsterState::Idle:	UpdateIdle(room, dt);	break;
 	case MonsterState::Patrol:	UpdatePatrol(room, dt);	break;
 	case MonsterState::Chase:	UpdateChase(room, dt);	break;
+	case MonsterState::Attack:	UpdateAttack(room, dt);	break;
 	case MonsterState::Return:	UpdateReturn(room, dt);	break;
 	}
 }
@@ -88,6 +93,11 @@ void Monster::UpdateChase(Room& room, float dt)
 	if (distSq > _data.loseRange * _data.loseRange)
 		return GiveUpChase("lost");		// 타겟이 너무 멀어짐
 
+	// 사거리 안이고 쿨타임이 끝났으면 예고 공격 시작
+	const SkillData& skill = *_data.skill;
+	if (_attackCooldown <= 0.f && distSq <= skill.range * skill.range)
+		return StartAttack(room, dx, dz);
+
 	// 충분히 붙었으면 그 자리에서 기다림 (타겟이 멀어지면 다음 틱에 다시 쫓음)
 	if (distSq <= _data.stopRange * _data.stopRange)
 	{
@@ -96,6 +106,73 @@ void Monster::UpdateChase(Room& room, float dt)
 	}
 
 	MoveTowards(targetPos->x(), targetPos->z(), _data.chaseSpeed, dt);
+}
+
+// 예고 공격 시작: 멈추고, 타겟 쪽으로 방향을 고정하고, 모두에게 예고(S_SKILL, cast_ms)를 알림
+//   쿨타임은 시작할 때부터 셈 (예고 시간도 쿨타임에 포함)
+void Monster::StartAttack(Room& room, float dx, float dz)
+{
+	StopMove();
+
+	const float dist = std::sqrt(dx * dx + dz * dz);
+	if (dist > 0.01f)
+	{
+		_castDirX = dx / dist;
+		_castDirZ = dz / dist;
+	}
+	else
+	{
+		// 겹쳐 있으면 지금 보는 방향 그대로 (0으로 나누기 방지)
+		const float yawRad = GetPosInfo()->yaw() * DEG_TO_RAD;
+		_castDirX = std::sin(yawRad);
+		_castDirZ = std::cos(yawRad);
+	}
+	GetPosInfo()->set_yaw(std::atan2(_castDirX, _castDirZ) * RAD_TO_DEG);
+
+	const SkillData& skill = *_data.skill;
+	_castRemaining = skill.castMs / 1000.f;
+	_attackCooldown = skill.cooldownMs / 1000.f;
+
+	SetState(MonsterState::Attack);
+	room.BroadcastSkill(*this, skill, _targetId);
+}
+
+// 예고 중: 움직이지 않고 기다렸다가, 끝나는 순간 고정 방향 부채꼴로 판정
+//   시간은 DoTimer가 아니라 틱의 dt로 잼 -> 시전 중 몬스터가 죽으면 Update가 안 불려서 판정도 자연히 사라짐
+void Monster::UpdateAttack(Room& room, float dt)
+{
+	PlayerRef target = room.FindPlayer(_targetId);
+	if (target == nullptr)
+		return GiveUpChase("left");		// 시전 취소
+
+	_castRemaining -= dt;
+	if (_castRemaining > 0.f)
+		return;
+
+	const bool hit = IsInHitArea(*target->GetPosInfo());
+	cout << "[Monster " << GetObjectId() << "] attack " << (hit ? "hit" : "miss") << " target " << _targetId << endl;
+	if (hit)
+		room.ApplyDamage(*target, GetObjectId(), _data.skill->damage);
+
+	SetState(MonsterState::Chase);
+}
+
+// 고정 방향 부채꼴 판정: 거리 <= 사거리, 고정 방향과 타겟 사이 각 <= 반각
+//   단위 벡터끼리의 내적 = cos(사이각) -> acos 없이 cos끼리 비교 (사이각이 작을수록 cos가 큼)
+bool Monster::IsInHitArea(const Protocol::PosInfo& targetPos)
+{
+	const SkillData& skill = *_data.skill;
+	const Protocol::PosInfo* pos = GetPosInfo();
+	const float dx = targetPos.x() - pos->x();
+	const float dz = targetPos.z() - pos->z();
+	const float dist = std::sqrt(dx * dx + dz * dz);
+	if (dist > skill.range)
+		return false;
+	if (dist < 0.01f)
+		return true;	// 겹쳐 있으면 방향과 상관없이 맞음 (0으로 나누기 방지)
+
+	const float cosToTarget = (dx * _castDirX + dz * _castDirZ) / dist;
+	return cosToTarget >= std::cos(skill.hitAngleDeg * DEG_TO_RAD);
 }
 
 // 스폰으로 돌아감. TryDetect를 안 해서 플레이어를 무시하고, 공격은 Room이 IsInvulnerable로 거절
@@ -162,7 +239,9 @@ void Monster::SetState(MonsterState next)
 		_destZ = _spawn.z + RandomRange(-_data.patrolRange, _data.patrolRange);
 		break;
 	case MonsterState::Chase:
-		break;	// 타겟(_targetId)은 TryDetect가 정해 둠
+		break;	// 타겟(_targetId)은 TryDetect / OnDamaged가 정해 둠
+	case MonsterState::Attack:
+		break;	// 방향, 예고 시간은 StartAttack이 정해 둠
 	case MonsterState::Return:
 		_targetId = 0;	// 타겟을 잊음
 		break;
@@ -171,7 +250,7 @@ void Monster::SetState(MonsterState next)
 	Protocol::PosInfo* pos = GetPosInfo();
 	cout << "[Monster " << GetObjectId() << "] " << ToString(prev) << " -> " << ToString(next)
 		<< " at (" << pos->x() << ", " << pos->z() << ")"
-		<< (next == MonsterState::Chase ? " target " + to_string(_targetId) : "") << endl;
+		<< (next == MonsterState::Chase || next == MonsterState::Attack ? " target " + to_string(_targetId) : "") << endl;
 }
 
 // (x, z)를 향해 speed로 한 틱만큼 이동. 이번 틱에 도착하면 그 자리에 멈추고 true

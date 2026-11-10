@@ -424,12 +424,24 @@ bool Handle_S_SKILL(PacketSessionRef& session, Protocol::S_SKILL& pkt)
 
 	ostringstream line;
 	line << "S_SKILL caster=" << pkt.object_id() << " skill=" << pkt.skill_id() << " target=" << pkt.target_id()
-		<< " yaw=" << pkt.yaw();
+		<< " yaw=" << pkt.yaw() << " cast=" << pkt.cast_ms() << " range=" << pkt.range() << " angle=" << pkt.hit_angle();
 	Log(me->GetClientId(), line.str());
 
 	// 내 스킬이 확정됨 -> 클라 쪽 쿨타임 시작 (진짜 클라도 S_SKILL을 받은 시점부터 잼)
 	if (pkt.object_id() == me->myId)
 		me->lastSkillUs = NowUs();
+
+	// 피하기 확인용 (Test/Scenarios/MonsterDodge.ps1, --dodge-test)
+	//   내가 타겟인 예고 공격(cast > 0)을 받으면 바로 몬스터 반대 방향으로 달림 -> 판정 순간 부채꼴 밖이라 안 맞아야 함
+	if (GDodgeTest && me->dodgeSent == false && pkt.cast_ms() > 0 && pkt.target_id() == me->myId)
+	{
+		SendMoveInput(session, me->myX - me->chaseTargetX, me->myZ - me->chaseTargetZ, ++me->chaseSeq);
+		me->dodgeSent = true;
+
+		ostringstream dodgeLine;
+		dodgeLine << "DODGE caster=" << pkt.object_id() << " cast=" << pkt.cast_ms();
+		Log(me->GetClientId(), dodgeLine.str());
+	}
 	return true;
 }
 

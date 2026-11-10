@@ -43,7 +43,7 @@ class Room : public JobQueue
 	// 스킬을 아예 못 쓴 요청 (S_SKILL 없음). 한 줄씩 찍지 않고 세기만 함 -> 핵이 초당 수천 개를 보내도 로그가 넘치지 않음
 	struct SkillRejectStats
 	{
-		uint64			unknownSkill = 0;	// 표(data_skill)에 없는 skill_id
+		uint64			unknownSkill = 0;	// 표(data_skill)에 없거나 몬스터 전용인 skill_id
 		uint64			cooldown = 0;		// 쿨타임 중
 		uint64			noMp = 0;			// MP 부족
 		TargetFailStats	target;				// 대상 필수 스킬의 타겟 문제
@@ -61,6 +61,8 @@ public:
 	PlayerRef	FindPlayer(uint64 objectId);
 	PlayerRef	FindNearestPlayer(float x, float z, float range);
 	void		BroadcastHp(GameObject& target, int32 damage, uint64 attackerId);	// target의 지금 HP를 모두에게 (데미지, 회복 공통)
+	void		BroadcastSkill(GameObject& caster, const SkillData& skill, uint64 targetId);	// S_SKILL (플레이어, 몬스터 공통)
+	void		ApplyDamage(GameObject& target, uint64 attackerId, int32 damage);
 
 private:
 	void	SpawnMonsters();
@@ -78,7 +80,6 @@ private:
 	void	RejectInput(PlayerRef player, uint32 seq, const char* reason);
 	TargetCheck	CheckTarget(const PlayerRef& player, const SkillData& skill, uint64 targetId, MonsterRef& outTarget);
 	static void	CountTargetFail(TargetFailStats& stats, TargetCheck result);
-	void	ApplyDamage(GameObject& target, uint64 attackerId, int32 damage);
 	void	Broadcast(SendBufferRef sendBuffer, uint64 exceptId = 0);
 	void	SendTo(PlayerRef player, SendBufferRef sendBuffer);
 
