@@ -50,6 +50,7 @@ extern bool GFleeTest;	// --flee-test: chase-test 후 몬스터 반대 방향으
 extern bool GAttackTest;	// --attack-test: chase-test 후 앞에 멈춘 몬스터를 공격 (검증용 묶음 + 1초마다 기본 공격)
 extern bool GRangedTest;	// --ranged-test: 몬스터에게서 10m 떨어진 곳에 멈춰 원거리 스킬 (어그로, MP 확인용)
 extern bool GDodgeTest;	// --dodge-test: chase-test 후 나를 노린 몬스터 예고 공격을 보고 반대로 달려서 피함
+extern bool GDeathTest;	// --death-test: chase-test 후 몬스터에게 맞아 죽으면, 죽은 상태에서 이동/공격을 보냄 (거절 확인)
 
 int64 NowUs();
 

@@ -93,16 +93,25 @@ message S_CHANGE_HP
 	uint64 attacker_id = 4;	// 때린 객체 (내가 때린 건지 구분용). 회복이면 0
 }
 
-// 서버 -> 클라(전체): 객체가 죽음 -> 죽는 모션 재생 후 클라가 직접 지움 (S_DESPAWN은 따로 안 옴)
-//   서버에서는 이미 사라진 상태: 이 id로 오는 공격은 거절되고, 리스폰은 새 id로 S_SPAWN
+// 서버 -> 클라(전체): 객체가 죽음 -> 죽는 모션 재생
+//   몬스터(revive_ms 0): 서버에서 이미 사라짐 -> 모션 뒤 클라가 직접 지움 (S_DESPAWN 없음), 리스폰은 새 id로 S_SPAWN
+//   플레이어(revive_ms > 0): 방에 남아 시체로 보임 -> revive_ms 뒤 S_REVIVE
 message S_DIE
 {
 	uint64 object_id = 1;	// 죽은 객체
 	uint64 killer_id = 2;	// 마지막 공격을 한 객체
+	int32 revive_ms = 3;	// 플레이어면 부활까지 남은 시간 (클라 카운트다운), 몬스터면 0
 }
 
 // 서버 -> 클라(본인만): 내 MP가 바뀜 (스킬 사용, 1초마다 자연 회복) -> MP바
 message S_CHANGE_MP
 {
 	int32 mp = 1;	// 바뀐 뒤 MP
+}
+
+// 서버 -> 클라(전체): 죽었던 플레이어가 살아남 -> object의 위치에 다시 세움 (HP는 object.stat_info)
+//   본인 MP는 따로 S_CHANGE_MP로 옴
+message S_REVIVE
+{
+	ObjectInfo object = 1;
 }

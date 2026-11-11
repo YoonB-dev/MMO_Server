@@ -61,6 +61,14 @@ foreach ($name in $targets)
     finally
     {
         Stop-AllTestProcesses   # 실패해도 띄운 서버/클라이언트는 반드시 정리
+
+        # Set-GameData로 기획 데이터를 바꾼 시나리오였으면 원래 값(Data/*.sql)으로 복구 -> 다음 시나리오에 영향 없음
+        if (Test-GameDataOverridden)
+        {
+            & (Join-Path $PSScriptRoot '..\Database\Setup-Database.ps1') | Out-Null
+            if ($LASTEXITCODE -ne 0) { Add-TestFailure 'failed to restore game data (run Database/Setup-Database.ps1)' }
+            else { Write-Host '  game data restored' }
+        }
     }
 
     $failures = Get-TestFailures

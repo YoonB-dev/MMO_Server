@@ -7,7 +7,7 @@
 //   Idle --대기 시간 끝--> Patrol --목적지 도착--> Idle
 //   Idle / Patrol --감지 거리 안에 플레이어, 또는 맞음(OnDamaged)--> Chase
 //   Chase --사거리 안 + 쿨타임 끝--> Attack (멈춤, 방향 고정, 예고) --cast_ms 뒤 부채꼴 판정--> Chase
-//   Chase / Attack --타겟이 나감(left) / 멀어짐(lost) / 스폰에서 너무 멂(leash)--> Return
+//   Chase / Attack --타겟이 나감(left) / 죽음(dead) / 멀어짐(lost) / 스폰에서 너무 멂(leash)--> Return
 //   Return --스폰 도착, HP 회복--> Idle          * Return 중에는 플레이어를 무시하고 무적
 enum class MonsterState
 {

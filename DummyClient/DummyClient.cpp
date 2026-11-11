@@ -5,7 +5,7 @@
 #include "ServerPacketHandler.h"
 
 // 접속 확인용 더미 클라이언트: N명이 접속해서 게임에 입장하고, 1초마다 C_PING -> S_PING 왕복 시간 출력
-//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--input-test] [--move-test] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test] [--ranged-test] [--dodge-test]
+//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--input-test] [--move-test] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test] [--ranged-test] [--dodge-test] [--death-test]
 //   인자 없이 실행하면 3명, 127.0.0.1:7777, ping 사용 (Test/Run-Test.ps1에서 옵션을 넘겨서 사용)
 static const int32 IOCP_THREAD_COUNT = 2;
 
@@ -24,6 +24,7 @@ struct ClientOptions
 	bool	attackTest = false;	// chaseTest 후 앞에 멈춘 몬스터 공격 (ping이 켜져 있어야 1초마다 공격)
 	bool	rangedTest = false;	// 몬스터에게서 10m 떨어진 곳에 멈춰 원거리 스킬 (타겟 고르기/조준은 chaseTest 것을 씀)
 	bool	dodgeTest = false;	// chaseTest 후 나를 노린 몬스터 예고 공격을 보고 반대로 달려서 피함
+	bool	deathTest = false;	// chaseTest 후 맞아 죽으면, 죽은 상태에서 이동/공격을 보냄
 };
 
 ClientOptions ParseOptions(int argc, char* argv[])
@@ -65,6 +66,8 @@ ClientOptions ParseOptions(int argc, char* argv[])
 			options.rangedTest = true;
 		else if (arg == "--dodge-test")
 			options.dodgeTest = true;
+		else if (arg == "--death-test")
+			options.deathTest = true;
 		else
 			Log("[Client] Unknown option: " + arg);
 	}
@@ -80,14 +83,15 @@ int main(int argc, char* argv[])
 	GInputTest = options.inputTest;
 	GMoveTest = options.moveTest;
 	GMonsterLog = options.monsterLog;
-	// turn/flee/attack/dodge-test는 chase-test 과정을 먼저 거침, ranged-test는 타겟 고르기/조준만 같이 씀
+	// turn/flee/attack/dodge/death-test는 chase-test 과정을 먼저 거침, ranged-test는 타겟 고르기/조준만 같이 씀
 	GChaseTest = options.chaseTest || options.turnTest || options.fleeTest || options.attackTest || options.rangedTest
-		|| options.dodgeTest;
+		|| options.dodgeTest || options.deathTest;
 	GTurnTest = options.turnTest;
 	GFleeTest = options.fleeTest;
 	GAttackTest = options.attackTest;
 	GRangedTest = options.rangedTest;
 	GDodgeTest = options.dodgeTest;
+	GDeathTest = options.deathTest;
 
 	this_thread::sleep_for(1s); // 같이 실행할 때 서버가 먼저 열리도록 잠깐 대기
 	ServerPacketHandler::Init();

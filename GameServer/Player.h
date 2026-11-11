@@ -24,6 +24,11 @@ public:
 	// MP는 본인만 보는 자원 -> ObjectInfo가 아니라 Player 멤버 (S_ENTER_GAME / S_CHANGE_MP로 본인에게만)
 	static constexpr int32	MAX_MP = 100;
 
+	// 죽음 / 부활
+	static constexpr uint64	REVIVE_DELAY_MS = 5000;	// 죽고 나서 부활까지 (DoTimer 시간이라 uint64)
+	static constexpr float	SPAWN_X = 0.f;			// 입장, 부활 위치
+	static constexpr float	SPAWN_Z = 0.f;
+
 	// Regen()의 결과: 실제로 바뀐 것만 true (꽉 차 있으면 false -> Room이 패킷을 안 보냄)
 	struct RegenResult
 	{
@@ -35,6 +40,8 @@ public:
 	Player(GameSessionRef session)
 		: GameObject(Protocol::OBJECT_TYPE_PLAYER), _session(session)
 	{
+		GetPosInfo()->set_x(SPAWN_X);
+		GetPosInfo()->set_z(SPAWN_Z);
 		GetStatInfo()->set_hp(MAX_HP);
 		GetStatInfo()->set_max_hp(MAX_HP);
 	}
@@ -42,10 +49,34 @@ public:
 	// 연결이 이미 끊겼으면 nullptr
 	GameSessionRef	GetSession() { return _session.lock(); }
 
+	// 죽음 = HP 0. 따로 상태를 두지 않음 (HP와 상태가 어긋날 일이 없게)
+	bool	IsDead() { return GetStatInfo()->hp() == 0; }
+
+	// 시작 위치에서 다시 살아남: 정지, HP 가득, MP 절반. 패킷은 Room이 보냄
+	void Revive()
+	{
+		Protocol::MoveInfo* moveInfo = GetMoveInfo();
+		moveInfo->set_dir_x(0.f);
+		moveInfo->set_dir_z(0.f);
+		moveInfo->set_speed(0.f);
+		moveInfo->set_state(Protocol::MOVE_STATE_IDLE);
+		moveInfo->mutable_pos_info()->set_x(SPAWN_X);
+		moveInfo->mutable_pos_info()->set_z(SPAWN_Z);
+
+		lastInput.dirX = 0.f;	// seq는 그대로 (클라가 이어서 보내는 번호)
+		lastInput.dirZ = 0.f;
+		hasNewInput = false;
+
+		GetStatInfo()->set_hp(MAX_HP);
+		mp = MAX_MP / 2;
+	}
+
 	// 1초치 자연 회복 (Room::UpdatePlayerStats가 호출). 값만 바꾸고 무엇이 바뀌었는지 돌려줌 -> 보내는 건 Room
 	RegenResult Regen()
 	{
 		RegenResult result;
+		if (IsDead())
+			return result;	// 죽은 동안은 회복 안 함 (부활은 Revive로만)
 
 		Protocol::StatInfo* stat = GetStatInfo();
 		if (stat->hp() < stat->max_hp())

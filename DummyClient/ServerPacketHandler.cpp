@@ -459,12 +459,32 @@ bool Handle_S_DIE(PacketSessionRef& session, Protocol::S_DIE& pkt)
 	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
 
 	ostringstream line;
-	line << "S_DIE id=" << pkt.object_id() << " killer=" << pkt.killer_id();
+	line << "S_DIE id=" << pkt.object_id() << " killer=" << pkt.killer_id() << " revive=" << pkt.revive_ms();
 	Log(me->GetClientId(), line.str());
 
-	// 서버에서 이미 사라진 id (진짜 클라는 죽는 모션 뒤에 액터를 지움)
+	// 몬스터: 서버에서 이미 사라진 id (진짜 클라는 죽는 모션 뒤에 액터를 지움)
 	//   chaseTargetId는 0으로 되돌리지 않음: 0이면 리스폰 몬스터의 S_SPAWN을 받을 때 추적 테스트가 처음부터 다시 시작됨
 	me->monsterIds.erase(pkt.object_id());
+
+	// 플레이어 죽음 확인용 (Test/Scenarios/PlayerDeath.ps1, --death-test)
+	//   내가 죽었으면 죽은 상태에서 이동 1개 + 기본 공격 1개를 보냄 -> 서버가 dead로 거절해야 함
+	if (GDeathTest && pkt.object_id() == me->myId)
+	{
+		SendMoveInput(session, 1.f, 0.f, ++me->chaseSeq);
+		SendSkill(session, BASIC_ATTACK_SKILL_ID, me->chaseTargetId);
+		Log(me->GetClientId(), "DEAD_INPUT sent");
+	}
+	return true;
+}
+
+bool Handle_S_REVIVE(PacketSessionRef& session, Protocol::S_REVIVE& pkt)
+{
+	const Protocol::ObjectInfo& object = pkt.object();
+	const Protocol::PosInfo& pos = object.move_info().pos_info();
+
+	ostringstream line;
+	line << "S_REVIVE id=" << object.object_id() << " x=" << pos.x() << " z=" << pos.z() << " hp=" << object.stat_info().hp();
+	Log(ClientIdOf(session), line.str());
 	return true;
 }
 

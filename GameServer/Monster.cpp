@@ -77,6 +77,8 @@ void Monster::UpdateChase(Room& room, float dt)
 	PlayerRef target = room.FindPlayer(_targetId);
 	if (target == nullptr)
 		return GiveUpChase("left");		// 타겟이 방을 나감
+	if (target->IsDead())
+		return GiveUpChase("dead");		// 타겟이 죽음 (시체는 안 쫓음)
 
 	// 스폰에서 너무 멀리 끌려왔으면 포기 (몬스터를 맵 끝까지 끌고 가는 것 방지)
 	const Protocol::PosInfo* pos = GetPosInfo();
@@ -144,6 +146,8 @@ void Monster::UpdateAttack(Room& room, float dt)
 	PlayerRef target = room.FindPlayer(_targetId);
 	if (target == nullptr)
 		return GiveUpChase("left");		// 시전 취소
+	if (target->IsDead())
+		return GiveUpChase("dead");		// 다른 몬스터에게 죽음 -> 시전 취소
 
 	_castRemaining -= dt;
 	if (_castRemaining > 0.f)
@@ -152,7 +156,7 @@ void Monster::UpdateAttack(Room& room, float dt)
 	const bool hit = IsInHitArea(*target->GetPosInfo());
 	cout << "[Monster " << GetObjectId() << "] attack " << (hit ? "hit" : "miss") << " target " << _targetId << endl;
 	if (hit)
-		room.ApplyDamage(*target, GetObjectId(), _data.skill->damage);
+		room.HitPlayer(target, GetObjectId(), _data.skill->damage);	// HP 0이면 Room이 죽음 처리
 
 	SetState(MonsterState::Chase);
 }
@@ -216,7 +220,7 @@ bool Monster::TryDetect(Room& room)
 	return true;
 }
 
-// Chase를 포기하고 스폰으로 (reason은 로그용: left / leash / lost)
+// Chase를 포기하고 스폰으로 (reason은 로그용: left / dead / leash / lost)
 void Monster::GiveUpChase(const char* reason)
 {
 	cout << "[Monster " << GetObjectId() << "] give up target " << _targetId << " (" << reason << ")" << endl;
