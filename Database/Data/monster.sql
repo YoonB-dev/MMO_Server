@@ -49,7 +49,7 @@ INSERT INTO data_monster
     (monster_id, name, max_hp, patrol_range, patrol_speed, idle_min_sec, idle_max_sec,
      detect_range, stop_range, chase_speed, lose_range, leash_range, return_speed, skill_id)
 VALUES
-    (1, 'Slime', 200, 5, 2, 1, 3, 8, 1.5, 4, 12, 20, 6, 101);
+    (1, 'Slime', 200, 5, 1.5, 1, 3, 8, 1.5, 3.5, 12, 20, 6, 101);
 
 INSERT INTO data_monster_spawn (spawn_id, monster_id, pos_x, pos_z, respawn_ms) VALUES
     (1, 1, 15, 15, 10000),

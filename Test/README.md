@@ -38,7 +38,7 @@ powershell -ExecutionPolicy Bypass -File .\Test\Run-Test.ps1 -All
 | `ManyClients` | 100명 동시 입장, 한꺼번에 종료해도 서버 생존 |
 | `MoveInputValidation` | 이상한 이동 입력(NaN, 중복 seq, 초당 30개 초과)을 서버가 버리는지 |
 | `Move` | 오른쪽 약 1초 이동 후 멈춤: 위치 약 5m, yaw 90, ack 2. 다른 클라도 S_MOVE 수신 |
-| `MonsterPatrol` | 몬스터가 Idle <-> Patrol 반복, 클라가 이동(speed 2)/멈춤(speed 0) S_MOVE 수신 |
+| `MonsterPatrol` | 몬스터가 Idle <-> Patrol 반복, 클라가 이동(speed 1.5)/멈춤(speed 0) S_MOVE 수신 |
 | `MonsterChase` | 몬스터 쪽으로 걸어가 5m 안에서 멈추면, 몬스터가 Chase로 바뀌어 다가와서 1.5m 앞에 멈춤 |
 | `MonsterTurnSend` | 위 추적 후 옆으로 피하면, 몬스터 방향이 10도 넘게 꺾일 때 4틱을 기다리지 않고 S_MOVE가 옴 (angle 정책) |
 | `MonsterReturn` | 위 추적 후 접속을 끊으면, 몬스터가 포기(left)하고 스폰으로 돌아가 Idle |
