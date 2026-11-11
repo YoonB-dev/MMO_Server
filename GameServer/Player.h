@@ -18,7 +18,7 @@ class Player : public GameObject
 
 	// 1초당 자연 회복량. 회복 규칙은 Regen() 한 곳에만 있음
 	static constexpr int32	HP_REGEN_PER_SECOND = 1;
-	static constexpr int32	MP_REGEN_PER_SECOND = 1;	// 원거리 스킬 최대 소모(초당 2)보다 작아야 MP가 의미 있음
+	static constexpr int32	MP_REGEN_PER_SECOND = 1;	// 원거리 스킬 최대 소모(초당 4)보다 작아야 MP가 의미 있음
 
 public:
 	// MP는 본인만 보는 자원 -> ObjectInfo가 아니라 Player 멤버 (S_ENTER_GAME / S_CHANGE_MP로 본인에게만)

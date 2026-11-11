@@ -31,5 +31,5 @@ CREATE TABLE data_skill (
 
 INSERT INTO data_skill (skill_id, name, cooldown_ms, range_m, damage, mp_cost, requires_target, cast_ms, hit_angle_deg) VALUES
     (1, 'BasicAttack', 500, 2, 10, 0, 0, 0, 0),
-    (2, 'RangedShot', 5000, 10, 30, 10, 1, 0, 0),
-    (101, 'SlimeTackle', 2000, 2, 8, 0, 1, 600, 45);
+    (2, 'RangedShot', 5000, 10, 30, 20, 1, 0, 0),
+    (101, 'SlimeTackle', 2000, 2, 16, 0, 1, 600, 45);

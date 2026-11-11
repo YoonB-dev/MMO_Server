@@ -9,5 +9,5 @@ Wait-LogCount -Name A -Pattern 'DODGE' -Expected 1 -TimeoutSec 15
 Wait-LogCount -Name server -Pattern 'attack miss' -Expected 1
 
 Assert-LogNotContains -Name server -Pattern 'attack hit'
-Assert-LogNotContains -Name A -Pattern 'damage=8 '
+Assert-LogNotContains -Name A -Pattern 'damage=16 '
 Assert-ServerAlive

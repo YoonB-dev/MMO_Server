@@ -46,8 +46,8 @@ powershell -ExecutionPolicy Bypass -File .\Test\Run-Test.ps1 -All
 | `MonsterAttack` | 위 추적 후 공격 묶음: 거절 4개(없는 스킬, 원거리 타겟 0, 원거리 플레이어 id, 쿨타임) + 정상 1개(HP 200 -> 190). 이후 1초마다 기본 공격: 먼 몬스터, 허공은 빗나감(S_SKILL target=0), 그다음부터 170까지. 서버 통계에 거절/빗나감 이유별 횟수 |
 | `MonsterDeath` | 4명이 같은 몬스터를 때려서 HP 0 -> 모두 S_DIE 수신, 10초(respawn_ms) 뒤 같은 스폰 자리에 새 id로 리스폰(S_SPAWN hp=200) |
 | `MonsterReturnHeal` | 때린 뒤 도망쳐서 몬스터가 포기(leash)하면, 돌아가는 동안 공격이 무적으로 빗나가고(데미지 없음) 스폰에 도착하면 HP 200으로 회복(S_CHANGE_HP damage=0) |
-| `MonsterRanged` | 몬스터에게서 10m(감지 거리 8m 밖)에 멈춰 원거리 스킬 -> 맞은 몬스터가 쫓아옴(aggro), HP 200 -> 170, MP 100 -> 90 -> 1초마다 +1. 바로 또 쏜 것은 쿨타임 거절이고 MP를 안 깎음 |
-| `MonsterHit` | 몬스터 앞에 가만히 서 있으면, 몬스터가 예고(S_SKILL skill=101 cast=600 range=2 angle=45) 후 공격 -> 서버 `attack hit`, 내 HP 100 -> 92, 이후 자연 회복 93 |
+| `MonsterRanged` | 몬스터에게서 10m(감지 거리 8m 밖)에 멈춰 원거리 스킬 -> 맞은 몬스터가 쫓아옴(aggro), HP 200 -> 170, MP 100 -> 80 -> 1초마다 +1. 바로 또 쏜 것은 쿨타임 거절이고 MP를 안 깎음 |
+| `MonsterHit` | 몬스터 앞에 가만히 서 있으면, 몬스터가 예고(S_SKILL skill=101 cast=600 range=2 angle=45) 후 공격 -> 서버 `attack hit`, 내 HP 100 -> 84, 이후 자연 회복 85 |
 | `MonsterDodge` | 나를 노린 예고를 보자마자 반대로 달리면 판정 순간 부채꼴 밖 -> 서버 `attack miss`, 데미지 없음 |
 | `PlayerDeath` | (몬스터 데미지를 100으로 덮어씀) 맞아 죽으면 S_DIE revive=5000, 몬스터는 포기(dead), 죽은 동안 이동/공격은 dead로 거절, 5초 뒤 (0, 0)에서 부활(S_REVIVE hp=100, MP 50) |
 
