@@ -6,6 +6,7 @@ $script:Config    = 'Debug'
 $script:LogDir    = $null
 $script:Processes = [ordered]@{}   # 이름 -> Process ('server', 'A', 'B' ...)
 $script:Failures  = New-Object System.Collections.Generic.List[string]
+$script:GameDataOverridden = $false   # 이 시나리오가 Set-GameData로 기획 데이터를 바꿨는지 (끝나면 Run-Test가 복구)
 
 # ==================== 실행 준비 (Run-Test.ps1에서 호출) ====================
 
@@ -17,7 +18,26 @@ function Initialize-TestContext
     $script:LogDir    = $LogDir
     $script:Processes = [ordered]@{}
     $script:Failures  = New-Object System.Collections.Generic.List[string]
+    $script:GameDataOverridden = $false
     New-Item -ItemType Directory -Force $LogDir | Out-Null
+}
+
+function Test-GameDataOverridden { return $script:GameDataOverridden }
+
+# ==================== 기획 데이터 ====================
+
+# 이 시나리오에서만 기획 데이터 수치를 덮어씀 (예: 몬스터 데미지를 올려서 빨리 죽게)
+#   서버는 시작할 때 한 번만 읽으므로 Start-GameServer 전에 호출
+#   Data/*.sql을 다시 적용한 뒤 덮어쓰고, 시나리오가 끝나면(실패해도) Run-Test가 Setup으로 원래 값을 되돌림
+function Set-GameData
+{
+    param([string[]]$Sql)
+
+    & (Join-Path $script:RepoRoot 'Database\Setup-Database.ps1') -ExtraSql $Sql | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Set-GameData failed: $($Sql -join '; ')" }
+
+    $script:GameDataOverridden = $true
+    Write-Host "  game data overridden: $($Sql -join '; ')"
 }
 
 function Get-TestFailures { return ,$script:Failures.ToArray() }

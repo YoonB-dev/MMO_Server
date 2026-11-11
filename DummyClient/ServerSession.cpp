@@ -10,6 +10,8 @@ bool GTurnTest = false;
 bool GFleeTest = false;
 bool GAttackTest = false;
 bool GRangedTest = false;
+bool GDodgeTest = false;
+bool GDeathTest = false;
 
 int64 NowUs()
 {

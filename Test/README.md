@@ -38,7 +38,7 @@ powershell -ExecutionPolicy Bypass -File .\Test\Run-Test.ps1 -All
 | `ManyClients` | 100명 동시 입장, 한꺼번에 종료해도 서버 생존 |
 | `MoveInputValidation` | 이상한 이동 입력(NaN, 중복 seq, 초당 30개 초과)을 서버가 버리는지 |
 | `Move` | 오른쪽 약 1초 이동 후 멈춤: 위치 약 5m, yaw 90, ack 2. 다른 클라도 S_MOVE 수신 |
-| `MonsterPatrol` | 몬스터가 Idle <-> Patrol 반복, 클라가 이동(speed 2)/멈춤(speed 0) S_MOVE 수신 |
+| `MonsterPatrol` | 몬스터가 Idle <-> Patrol 반복, 클라가 이동(speed 1.5)/멈춤(speed 0) S_MOVE 수신 |
 | `MonsterChase` | 몬스터 쪽으로 걸어가 5m 안에서 멈추면, 몬스터가 Chase로 바뀌어 다가와서 1.5m 앞에 멈춤 |
 | `MonsterTurnSend` | 위 추적 후 옆으로 피하면, 몬스터 방향이 10도 넘게 꺾일 때 4틱을 기다리지 않고 S_MOVE가 옴 (angle 정책) |
 | `MonsterReturn` | 위 추적 후 접속을 끊으면, 몬스터가 포기(left)하고 스폰으로 돌아가 Idle |
@@ -47,6 +47,9 @@ powershell -ExecutionPolicy Bypass -File .\Test\Run-Test.ps1 -All
 | `MonsterDeath` | 4명이 같은 몬스터를 때려서 HP 0 -> 모두 S_DIE 수신, 10초(respawn_ms) 뒤 같은 스폰 자리에 새 id로 리스폰(S_SPAWN hp=200) |
 | `MonsterReturnHeal` | 때린 뒤 도망쳐서 몬스터가 포기(leash)하면, 돌아가는 동안 공격이 무적으로 빗나가고(데미지 없음) 스폰에 도착하면 HP 200으로 회복(S_CHANGE_HP damage=0) |
 | `MonsterRanged` | 몬스터에게서 10m(감지 거리 8m 밖)에 멈춰 원거리 스킬 -> 맞은 몬스터가 쫓아옴(aggro), HP 200 -> 170, MP 100 -> 90 -> 1초마다 +1. 바로 또 쏜 것은 쿨타임 거절이고 MP를 안 깎음 |
+| `MonsterHit` | 몬스터 앞에 가만히 서 있으면, 몬스터가 예고(S_SKILL skill=101 cast=600 range=2 angle=45) 후 공격 -> 서버 `attack hit`, 내 HP 100 -> 92, 이후 자연 회복 93 |
+| `MonsterDodge` | 나를 노린 예고를 보자마자 반대로 달리면 판정 순간 부채꼴 밖 -> 서버 `attack miss`, 데미지 없음 |
+| `PlayerDeath` | (몬스터 데미지를 100으로 덮어씀) 맞아 죽으면 S_DIE revive=5000, 몬스터는 포기(dead), 죽은 동안 이동/공격은 dead로 거절, 5초 뒤 (0, 0)에서 부활(S_REVIVE hp=100, MP 50) |
 
 ## 시나리오 추가
 
@@ -65,6 +68,7 @@ Assert-ServerAlive
 
 | 함수 | 설명 |
 |---|---|
+| `Set-GameData -Sql "<문장>"` | 이 시나리오에서만 기획 데이터 수치를 덮어씀. `Start-GameServer` 전에 호출. 시나리오가 끝나면(실패해도) Run-Test가 원래 값으로 복구 |
 | `Start-GameServer [-TimeoutSec 10]` | 서버 실행, 로그에 `listening`이 뜰 때까지 대기. 실패하면 시나리오 중단 |
 | `Start-DummyClients -Name -Count [-Arguments]` | 이름 붙인 DummyClient 그룹 실행 (프로세스 하나에 Count명) |
 | `Stop-DummyClients -Name` | 그룹 강제 종료 (연결이 한꺼번에 끊김) |
@@ -81,7 +85,7 @@ Assert-ServerAlive
 ### DummyClient 옵션
 
 ```
-DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test] [--ranged-test]
+DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test] [--ranged-test] [--dodge-test] [--death-test]
 ```
 
 | 옵션 | 기본값 | 설명 |
@@ -95,6 +99,8 @@ DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--monste
 | `--flee-test` | 끔 | `--chase-test` 후 몬스터 반대 방향으로 계속 달림 (몬스터 복귀 확인용) |
 | `--attack-test` | 끔 | `--chase-test` 후 앞에 멈춘 몬스터에게 검증용 공격 묶음을 보내고, 이후 S_PING(1초)마다 기본 공격 (처음 두 번은 먼 몬스터, 허공으로 빗나감, ping을 끄면 묶음만). 타겟이 죽으면(S_DIE) 멈춤 |
 | `--ranged-test` | 끔 | 가장 가까운 몬스터 쪽으로 걸어가 10m에서 멈추고, 멈춤이 적용되면 원거리 스킬(2번)을 두 번 연달아 보냄 (`RANGED_TEST shot`) |
+| `--dodge-test` | 끔 | `--chase-test` 후 나를 노린 몬스터 예고(S_SKILL cast > 0)를 받으면 바로 몬스터 반대 방향으로 달림 (`DODGE`) |
+| `--death-test` | 끔 | `--chase-test` 후 내가 죽으면(S_DIE id가 나) 죽은 상태에서 이동 1개 + 기본 공격 1개를 보냄 (`DEAD_INPUT sent`) |
 
 로그 형식은 `[Client <번호>] <내용>`이고, 한 줄씩 통째로 출력돼서 여러 세션이 동시에 찍어도 섞이지 않는다.
 새 동작(예: 이동)을 테스트하려면 DummyClient에 옵션을 추가하고 `-Arguments`로 넘긴다.

@@ -22,6 +22,8 @@
 // 전투 (C_SKILL -> HandleSkill)
 //   검사 6개 (타겟 문제는 대상 필수 스킬이면 거절, 아니면 빗나감) -> 확정(쿨타임, MP) -> S_SKILL
 //   -> 빗나감이면 끝, 맞았으면 ApplyDamage(S_CHANGE_HP)
+//   몬스터 공격은 AI가 정함 (Monster::UpdateChase -> StartAttack: BroadcastSkill로 예고 -> UpdateAttack: 판정 -> HitPlayer)
+//   플레이어 HP 0 -> KillPlayer (시체로 남음, S_DIE) -> 5초 뒤 RevivePlayer (시작 위치, S_REVIVE)
 //   -> HP 0이면 KillMonster (S_DIE, 리스폰 예약), 아니면 Monster::OnDamaged (어그로)
 
 // main에서 생성 (전역 변수 초기화 시점에는 ServerCore의 GMemory가 아직 없을 수 있음)
@@ -128,9 +130,9 @@ void Room::LogStats(uint64 now)
 	//   거절은 정상 플레이에서 거의 0 (핵 의심용), 빗나감은 허공 공격이라 정상 플레이에서도 생김
 	const SkillRejectStats& r = _skillRejects;
 	const TargetFailStats& rt = r.target;
-	if (r.unknownSkill + r.cooldown + r.noMp + rt.noTarget + rt.badTarget + rt.invulnerable + rt.outOfRange > 0)
+	if (r.dead + r.unknownSkill + r.cooldown + r.noMp + rt.noTarget + rt.badTarget + rt.invulnerable + rt.outOfRange > 0)
 	{
-		cout << "[Room] skill rejects: unknown-skill " << r.unknownSkill << ", cooldown " << r.cooldown
+		cout << "[Room] skill rejects: dead " << r.dead << ", unknown-skill " << r.unknownSkill << ", cooldown " << r.cooldown
 			<< ", no-mp " << r.noMp << ", no-target " << rt.noTarget << ", bad-target " << rt.badTarget
 			<< ", invulnerable " << rt.invulnerable << ", out-of-range " << rt.outOfRange << endl;
 	}
@@ -209,6 +211,10 @@ void Room::HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 butt
 	if (++player->inputCount > MAX_INPUTS_PER_SECOND)
 		return RejectInput(player, seq, "rate");
 
+	// 죽은 동안은 못 움직임 (부활할 때 Revive가 정지 상태로 세움)
+	if (player->IsDead())
+		return RejectInput(player, seq, "dead");
+
 	// 순서: 이미 받은 번호 이하면 옛날 입력이거나 중복
 	if (seq <= player->lastInput.seq)
 		return RejectInput(player, seq, "old seq");
@@ -247,9 +253,16 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 	if (_players.find(player->GetObjectId()) == _players.end())
 		return;
 
-	// 1. 스킬 존재 (data_skill)
+	// 죽은 동안은 스킬을 못 씀
+	if (player->IsDead())
+	{
+		_skillRejects.dead++;
+		return;
+	}
+
+	// 1. 스킬 존재 (data_skill). 몬스터 스킬(101번부터)은 플레이어가 못 씀
 	const SkillData* skill = FindSkillData(skillId);
-	if (skill == nullptr)
+	if (skill == nullptr || skillId >= MONSTER_SKILL_ID_BEGIN)
 	{
 		_skillRejects.unknownSkill++;
 		return;
@@ -307,14 +320,7 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 	}
 
 	// 모두에게: 누가 무슨 스킬을 어느 방향으로 썼고, 누가 맞았나 (빗나감이면 target 0)
-	{
-		Protocol::S_SKILL pkt;
-		pkt.set_object_id(player->GetObjectId());
-		pkt.set_skill_id(skillId);
-		pkt.set_target_id(target != nullptr ? target->GetObjectId() : 0);
-		pkt.set_yaw(myPos->yaw());
-		Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
-	}
+	BroadcastSkill(*player, *skill, target != nullptr ? target->GetObjectId() : 0);
 
 	if (target == nullptr)
 		return;		// 빗나감: 데미지 없음
@@ -377,7 +383,7 @@ PlayerRef Room::FindPlayer(uint64 objectId)
 	return (it != _players.end()) ? it->second : nullptr;
 }
 
-// (x, z)에서 range 안에 있는 가장 가까운 플레이어. 없으면 nullptr
+// (x, z)에서 range 안에 있는 가장 가까운 살아 있는 플레이어. 없으면 nullptr
 PlayerRef Room::FindNearestPlayer(float x, float z, float range)
 {
 	PlayerRef nearest = nullptr;
@@ -385,6 +391,9 @@ PlayerRef Room::FindNearestPlayer(float x, float z, float range)
 
 	for (auto& [id, player] : _players)
 	{
+		if (player->IsDead())
+			continue;	// 시체는 감지하지 않음
+
 		const Protocol::PosInfo* pos = player->GetPosInfo();
 		const float dx = pos->x() - x;
 		const float dz = pos->z() - z;
@@ -513,8 +522,8 @@ void Room::RejectInput(PlayerRef player, uint32 seq, const char* reason)
 		<< ", seq " << seq << ", reason " << reason << endl;
 }
 
-// target의 HP를 깎고(0 아래로는 안 내려감) 모두에게 알림. 죽음 처리는 호출한 쪽에서
-//   HP는 GameObject(ObjectInfo)에 있으므로 Monster가 아니라 GameObject로 받음
+// target의 HP를 깎고(0 아래로는 안 내려감) 모두에게 알림. 죽음 처리는 호출한 쪽에서 (HandleSkill / HitPlayer)
+//   HP는 GameObject(ObjectInfo)에 있으므로 Monster / Player 구분 없이 GameObject로 받음
 void Room::ApplyDamage(GameObject& target, uint64 attackerId, int32 damage)
 {
 	Protocol::StatInfo* stat = target.GetStatInfo();
@@ -524,6 +533,21 @@ void Room::ApplyDamage(GameObject& target, uint64 attackerId, int32 damage)
 	stat->set_hp(hp);
 
 	BroadcastHp(target, damage, attackerId);
+}
+
+// S_SKILL을 모두에게. 플레이어 스킬(HandleSkill)과 몬스터 예고 공격(Monster::StartAttack) 공통
+//   yaw는 시전자의 지금 방향. cast_ms, range, hit_angle은 클라가 예고 범위를 그리는 데 씀 (즉시 스킬은 cast 0)
+void Room::BroadcastSkill(GameObject& caster, const SkillData& skill, uint64 targetId)
+{
+	Protocol::S_SKILL pkt;
+	pkt.set_object_id(caster.GetObjectId());
+	pkt.set_skill_id(skill.skillId);
+	pkt.set_target_id(targetId);
+	pkt.set_yaw(caster.GetPosInfo()->yaw());
+	pkt.set_cast_ms(skill.castMs);
+	pkt.set_range(skill.range);
+	pkt.set_hit_angle(skill.hitAngleDeg);
+	Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
 }
 
 // target의 지금 HP를 모두에게. 데미지(ApplyDamage)와 회복(Monster가 스폰에 도착) 공통
@@ -556,6 +580,54 @@ void Room::KillMonster(MonsterRef monster, uint64 killerId)
 
 	// 같은 객체를 되살리지 않고 respawn_ms 뒤에 새 id로 만듦. spawn은 예약된 job 안에 복사돼서 monster가 지워져도 안전
 	DoTimer(static_cast<uint64>(spawn.respawnMs), &Room::SpawnMonster, spawn);
+}
+
+// 몬스터가 플레이어를 맞힘 (Monster::UpdateAttack). 몬스터 쪽 HandleSkill처럼 "데미지 + 죽음 처리"를 한 곳에서
+void Room::HitPlayer(const PlayerRef& target, uint64 attackerId, int32 damage)
+{
+	ApplyDamage(*target, attackerId, damage);
+	if (target->IsDead())
+		KillPlayer(target, attackerId);
+}
+
+// 플레이어 죽음: 방에는 남김 (연결 유지, 시체로 보임). 멈추고, 알리고, 부활 예약
+//   _players를 지우지 않으므로 UpdateMonsters 도중(몬스터 공격 판정)에 불려도 반복자 문제가 없음
+void Room::KillPlayer(const PlayerRef& player, uint64 killerId)
+{
+	// 이동 우편함에 정지를 넣음 -> 다음 틱 ApplyInput이 멈추고 S_MOVE로 알림 (이후 입력은 HandleMoveInput이 거절)
+	player->lastInput.dirX = 0.f;
+	player->lastInput.dirZ = 0.f;
+	player->hasNewInput = true;
+
+	Protocol::S_DIE pkt;
+	pkt.set_object_id(player->GetObjectId());
+	pkt.set_killer_id(killerId);
+	pkt.set_revive_ms(static_cast<int32>(Player::REVIVE_DELAY_MS));
+	Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
+
+	cout << "[Room] player " << player->GetObjectId() << " killed by " << killerId
+		<< ", revive in " << Player::REVIVE_DELAY_MS << "ms" << endl;
+
+	// PlayerRef가 아니라 id로 예약: 5초 사이에 나가면 RevivePlayer가 못 찾고 끝남
+	//   (PlayerRef를 넘기면 job이 shared_ptr 복사본을 들고 있어서, 나간 플레이어 객체가 5초 동안 안 지워짐)
+	DoTimer(Player::REVIVE_DELAY_MS, &Room::RevivePlayer, player->GetObjectId());
+}
+
+// 부활: 시작 위치에서 HP 가득, MP 절반 -> 모두에게 S_REVIVE, 본인에게 MP
+void Room::RevivePlayer(uint64 playerId)
+{
+	PlayerRef player = FindPlayer(playerId);
+	if (player == nullptr || player->IsDead() == false)
+		return;		// 그사이 나감
+
+	player->Revive();
+
+	Protocol::S_REVIVE pkt;
+	*pkt.mutable_object() = player->GetObjectInfo();
+	Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
+	SendMp(player);
+
+	cout << "[Room] player " << playerId << " revived at (" << Player::SPAWN_X << ", " << Player::SPAWN_Z << ")" << endl;
 }
 
 void Room::Broadcast(SendBufferRef sendBuffer, uint64 exceptId)

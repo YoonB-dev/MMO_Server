@@ -71,12 +71,17 @@ message C_SKILL
 
 // 서버 -> 클라(전체): 스킬 사용 확정 -> 시전 모션 재생, 시전자 본인은 쿨타임 UI 시작
 //   target_id = 0이면 빗나감/허공: yaw 방향으로 휘두르는 모션만 (데미지 없음)
+//   cast_ms > 0이면 예고 시작 (몬스터 공격): cast_ms 동안 yaw 방향 부채꼴(range, hit_angle)을 바닥에 표시
+//     -> 끝날 때 그 안에 있으면 S_CHANGE_HP가 오고, 피했으면 아무것도 안 옴
 message S_SKILL
 {
-	uint64 object_id = 1;	// 시전자
+	uint64 object_id = 1;	// 시전자 (플레이어 또는 몬스터)
 	int32 skill_id = 2;
-	uint64 target_id = 3;	// 맞은 대상 (0 = 빗나감)
-	float yaw = 4;			// 시전자가 바라보는 방향 (서버 좌표, 도)
+	uint64 target_id = 3;	// 맞은 대상 / 노리는 대상 (0 = 빗나감)
+	float yaw = 4;			// 시전자가 바라보는 방향 (서버 좌표, 도). 예고 공격이면 판정 방향
+	int32 cast_ms = 5;		// 예고 시간 (0 = 즉시, 이 패킷이 곧 결과)
+	float range = 6;		// 예고 범위 표시용: 부채꼴 반지름 (m)
+	float hit_angle = 7;	// 예고 범위 표시용: 좌우 반각 (도)
 }
 
 // 서버 -> 클라(전체): HP가 바뀜 -> 데미지 숫자, HP바
@@ -88,16 +93,25 @@ message S_CHANGE_HP
 	uint64 attacker_id = 4;	// 때린 객체 (내가 때린 건지 구분용). 회복이면 0
 }
 
-// 서버 -> 클라(전체): 객체가 죽음 -> 죽는 모션 재생 후 클라가 직접 지움 (S_DESPAWN은 따로 안 옴)
-//   서버에서는 이미 사라진 상태: 이 id로 오는 공격은 거절되고, 리스폰은 새 id로 S_SPAWN
+// 서버 -> 클라(전체): 객체가 죽음 -> 죽는 모션 재생
+//   몬스터(revive_ms 0): 서버에서 이미 사라짐 -> 모션 뒤 클라가 직접 지움 (S_DESPAWN 없음), 리스폰은 새 id로 S_SPAWN
+//   플레이어(revive_ms > 0): 방에 남아 시체로 보임 -> revive_ms 뒤 S_REVIVE
 message S_DIE
 {
 	uint64 object_id = 1;	// 죽은 객체
 	uint64 killer_id = 2;	// 마지막 공격을 한 객체
+	int32 revive_ms = 3;	// 플레이어면 부활까지 남은 시간 (클라 카운트다운), 몬스터면 0
 }
 
 // 서버 -> 클라(본인만): 내 MP가 바뀜 (스킬 사용, 1초마다 자연 회복) -> MP바
 message S_CHANGE_MP
 {
 	int32 mp = 1;	// 바뀐 뒤 MP
+}
+
+// 서버 -> 클라(전체): 죽었던 플레이어가 살아남 -> object의 위치에 다시 세움 (HP는 object.stat_info)
+//   본인 MP는 따로 S_CHANGE_MP로 옴
+message S_REVIVE
+{
+	ObjectInfo object = 1;
 }

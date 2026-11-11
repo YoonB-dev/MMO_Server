@@ -424,12 +424,24 @@ bool Handle_S_SKILL(PacketSessionRef& session, Protocol::S_SKILL& pkt)
 
 	ostringstream line;
 	line << "S_SKILL caster=" << pkt.object_id() << " skill=" << pkt.skill_id() << " target=" << pkt.target_id()
-		<< " yaw=" << pkt.yaw();
+		<< " yaw=" << pkt.yaw() << " cast=" << pkt.cast_ms() << " range=" << pkt.range() << " angle=" << pkt.hit_angle();
 	Log(me->GetClientId(), line.str());
 
 	// 내 스킬이 확정됨 -> 클라 쪽 쿨타임 시작 (진짜 클라도 S_SKILL을 받은 시점부터 잼)
 	if (pkt.object_id() == me->myId)
 		me->lastSkillUs = NowUs();
+
+	// 피하기 확인용 (Test/Scenarios/MonsterDodge.ps1, --dodge-test)
+	//   내가 타겟인 예고 공격(cast > 0)을 받으면 바로 몬스터 반대 방향으로 달림 -> 판정 순간 부채꼴 밖이라 안 맞아야 함
+	if (GDodgeTest && me->dodgeSent == false && pkt.cast_ms() > 0 && pkt.target_id() == me->myId)
+	{
+		SendMoveInput(session, me->myX - me->chaseTargetX, me->myZ - me->chaseTargetZ, ++me->chaseSeq);
+		me->dodgeSent = true;
+
+		ostringstream dodgeLine;
+		dodgeLine << "DODGE caster=" << pkt.object_id() << " cast=" << pkt.cast_ms();
+		Log(me->GetClientId(), dodgeLine.str());
+	}
 	return true;
 }
 
@@ -447,12 +459,32 @@ bool Handle_S_DIE(PacketSessionRef& session, Protocol::S_DIE& pkt)
 	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
 
 	ostringstream line;
-	line << "S_DIE id=" << pkt.object_id() << " killer=" << pkt.killer_id();
+	line << "S_DIE id=" << pkt.object_id() << " killer=" << pkt.killer_id() << " revive=" << pkt.revive_ms();
 	Log(me->GetClientId(), line.str());
 
-	// 서버에서 이미 사라진 id (진짜 클라는 죽는 모션 뒤에 액터를 지움)
+	// 몬스터: 서버에서 이미 사라진 id (진짜 클라는 죽는 모션 뒤에 액터를 지움)
 	//   chaseTargetId는 0으로 되돌리지 않음: 0이면 리스폰 몬스터의 S_SPAWN을 받을 때 추적 테스트가 처음부터 다시 시작됨
 	me->monsterIds.erase(pkt.object_id());
+
+	// 플레이어 죽음 확인용 (Test/Scenarios/PlayerDeath.ps1, --death-test)
+	//   내가 죽었으면 죽은 상태에서 이동 1개 + 기본 공격 1개를 보냄 -> 서버가 dead로 거절해야 함
+	if (GDeathTest && pkt.object_id() == me->myId)
+	{
+		SendMoveInput(session, 1.f, 0.f, ++me->chaseSeq);
+		SendSkill(session, BASIC_ATTACK_SKILL_ID, me->chaseTargetId);
+		Log(me->GetClientId(), "DEAD_INPUT sent");
+	}
+	return true;
+}
+
+bool Handle_S_REVIVE(PacketSessionRef& session, Protocol::S_REVIVE& pkt)
+{
+	const Protocol::ObjectInfo& object = pkt.object();
+	const Protocol::PosInfo& pos = object.move_info().pos_info();
+
+	ostringstream line;
+	line << "S_REVIVE id=" << object.object_id() << " x=" << pos.x() << " z=" << pos.z() << " hp=" << object.stat_info().hp();
+	Log(ClientIdOf(session), line.str());
 	return true;
 }
 

@@ -34,6 +34,7 @@ public:
 	int64	lastSkillUs = 0;		// --attack-test: 마지막으로 내 스킬이 확정된(S_SKILL) 시각. 클라 쪽 쿨타임 계산용
 	int32	autoAttackCount = 0;	// --attack-test: 보낸 자동 공격 수 (0: 먼 몬스터, 1: 허공, 이후: 타겟)
 	bool	rangedShotSent = false;	// --ranged-test: 원거리 스킬을 보냈는지
+	bool	dodgeSent = false;		// --dodge-test: 몬스터 예고를 보고 피하는 입력을 보냈는지
 
 private:
 	int32 _clientId = 0;	// 이 프로세스 안에서 1, 2, 3 ... (로그 구분용)
@@ -48,6 +49,8 @@ extern bool GTurnTest;	// --turn-test: chase-test 후 옆으로 피하면서, �
 extern bool GFleeTest;	// --flee-test: chase-test 후 몬스터 반대 방향으로 도망 (몬스터 복귀 확인용)
 extern bool GAttackTest;	// --attack-test: chase-test 후 앞에 멈춘 몬스터를 공격 (검증용 묶음 + 1초마다 기본 공격)
 extern bool GRangedTest;	// --ranged-test: 몬스터에게서 10m 떨어진 곳에 멈춰 원거리 스킬 (어그로, MP 확인용)
+extern bool GDodgeTest;	// --dodge-test: chase-test 후 나를 노린 몬스터 예고 공격을 보고 반대로 달려서 피함
+extern bool GDeathTest;	// --death-test: chase-test 후 몬스터에게 맞아 죽으면, 죽은 상태에서 이동/공격을 보냄 (거절 확인)
 
 int64 NowUs();
 

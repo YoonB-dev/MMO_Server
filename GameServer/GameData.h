@@ -3,6 +3,10 @@
 // 기획 데이터 (DB의 data_ 테이블). 서버 시작 때 main에서 한 번 읽고, 그 뒤로는 읽기만 함
 //   -> 워커 스레드가 뜨기 전에 다 채우므로 여러 스레드가 락 없이 읽어도 안전
 
+struct SkillData;
+
+constexpr int32 MONSTER_SKILL_ID_BEGIN = 101;	// 이 번호부터는 몬스터 스킬 (플레이어 C_SKILL은 거절). skill.sql과 맞춤
+
 // data_monster 한 줄: 몬스터 종류별 AI 수치 (거리 m, 속도 m/s, 시간 초)
 struct MonsterData
 {
@@ -18,6 +22,8 @@ struct MonsterData
 	float	loseRange = 0.f;	// 타겟이 이보다 멀어지면 포기
 	float	leashRange = 0.f;	// 스폰에서 이보다 멀리 끌려오면 포기
 	float	returnSpeed = 0.f;
+	int32	skillId = 0;				// 공격 스킬 (data_skill)
+	const SkillData*	skill = nullptr;	// 로드할 때 skillId로 찾아서 연결해 둠 (s_skills 원소, 주소가 안 바뀜)
 };
 
 // data_monster_spawn 한 줄: 어디에 어떤 몬스터가 나오나
@@ -39,6 +45,8 @@ struct SkillData
 	int32	damage = 0;
 	int32	mpCost = 0;		// 쓸 때 드는 MP
 	bool	requiresTarget = false;	// true: 대상이 없거나 잘못되면 거절, false: 빗나감으로 나감 (허공 공격)
+	int32	castMs = 0;				// 예고 시간 (0 = 즉시). 지나면 판정
+	float	hitAngleDeg = 0.f;		// 예고 공격 판정 부채꼴의 좌우 반각 (도)
 };
 
 bool							LoadGameData();						// main에서 DB 접속 후 한 번. 실패하면 이유를 찍고 false

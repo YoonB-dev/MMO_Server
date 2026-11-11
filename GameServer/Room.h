@@ -43,7 +43,8 @@ class Room : public JobQueue
 	// 스킬을 아예 못 쓴 요청 (S_SKILL 없음). 한 줄씩 찍지 않고 세기만 함 -> 핵이 초당 수천 개를 보내도 로그가 넘치지 않음
 	struct SkillRejectStats
 	{
-		uint64			unknownSkill = 0;	// 표(data_skill)에 없는 skill_id
+		uint64			dead = 0;			// 죽은 플레이어의 요청
+		uint64			unknownSkill = 0;	// 표(data_skill)에 없거나 몬스터 전용인 skill_id
 		uint64			cooldown = 0;		// 쿨타임 중
 		uint64			noMp = 0;			// MP 부족
 		TargetFailStats	target;				// 대상 필수 스킬의 타겟 문제
@@ -61,11 +62,16 @@ public:
 	PlayerRef	FindPlayer(uint64 objectId);
 	PlayerRef	FindNearestPlayer(float x, float z, float range);
 	void		BroadcastHp(GameObject& target, int32 damage, uint64 attackerId);	// target의 지금 HP를 모두에게 (데미지, 회복 공통)
+	void		BroadcastSkill(GameObject& caster, const SkillData& skill, uint64 targetId);	// S_SKILL (플레이어, 몬스터 공통)
+	void		HitPlayer(const PlayerRef& target, uint64 attackerId, int32 damage);			// 데미지 + HP 0이면 KillPlayer
 
 private:
 	void	SpawnMonsters();
 	void	SpawnMonster(MonsterSpawnData spawn);				// 한 마리 생성 + S_SPAWN. 시작할 때와 리스폰 때 같이 씀
 	void	KillMonster(MonsterRef monster, uint64 killerId);	// 방에서 빼기 + S_DIE + 리스폰 예약
+	void	KillPlayer(const PlayerRef& player, uint64 killerId);	// 방에 남김(시체) + 정지 + S_DIE + 부활 예약
+	void	RevivePlayer(uint64 playerId);						// 부활 (KillPlayer의 DoTimer). id로 받음: 그사이 나갔으면 못 찾고 끝
+	void	ApplyDamage(GameObject& target, uint64 attackerId, int32 damage);
 	void	Tick();
 	void	LogStats(uint64 now);
 	void	ResetInputCounts();
@@ -78,7 +84,6 @@ private:
 	void	RejectInput(PlayerRef player, uint32 seq, const char* reason);
 	TargetCheck	CheckTarget(const PlayerRef& player, const SkillData& skill, uint64 targetId, MonsterRef& outTarget);
 	static void	CountTargetFail(TargetFailStats& stats, TargetCheck result);
-	void	ApplyDamage(GameObject& target, uint64 attackerId, int32 damage);
 	void	Broadcast(SendBufferRef sendBuffer, uint64 exceptId = 0);
 	void	SendTo(PlayerRef player, SendBufferRef sendBuffer);
 
