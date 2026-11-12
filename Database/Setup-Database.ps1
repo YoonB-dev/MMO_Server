@@ -2,7 +2,8 @@
 #   1. DB가 없으면 만든다 (이미 있으면 그대로 둠)
 #   2. 기획 데이터 Data/*.sql을 이름 순서대로 다시 적용한다 (파일마다 테이블을 지우고 다시 만들고 값 넣기)
 #      -> 기획 데이터의 정답은 이 파일들. 값을 바꾸려면 DB가 아니라 파일을 고치고 이 스크립트를 다시 실행
-#   처음 한 번, 또는 Data/*.sql을 고쳤을 때:  .\Database\Setup-Database.ps1
+#   3. 유저 데이터 Migrations/NNN_*.sql 중 아직 적용 안 한 번호만 순서대로 적용한다 (schema_version에 기록, 절대 안 지움)
+#   처음 한 번, 또는 Data/*.sql을 고쳤을 때, Migrations를 추가했을 때:  .\Database\Setup-Database.ps1
 #   Test\Run-Test.ps1이 시나리오 전에 자동으로 호출한다
 #   -ExtraSql: Data/*.sql 적용 뒤에 실행할 문장들 (테스트 시나리오가 수치를 잠깐 덮어쓸 때, TestLib의 Set-GameData)
 #   스크립트 실행이 막혀 있으면: powershell -ExecutionPolicy Bypass -File .\Database\Setup-Database.ps1
@@ -101,6 +102,30 @@ try
         $count = Invoke-SqlFile -Connection $conn -Path $file.FullName
         Write-Host "Applied Data/$($file.Name) ($count statements)"
     }
+
+    # 유저 데이터: Migrations/NNN_*.sql 중 schema_version에 없는 번호만 순서대로 (한 번 적용한 파일은 다시 안 돎)
+    $cmd.CommandText = "CREATE TABLE IF NOT EXISTS schema_version (" +
+        "version INT NOT NULL PRIMARY KEY, file_name VARCHAR(128) NOT NULL, " +
+        "applied_at DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP())) ENGINE=InnoDB"
+    [void]$cmd.ExecuteNonQuery()
+    $cmd.CommandText = "SELECT COALESCE(MAX(version), 0) FROM schema_version"
+    $currentVersion = [int]$cmd.ExecuteScalar()
+
+    $applied = 0
+    foreach ($file in Get-ChildItem (Join-Path $PSScriptRoot 'Migrations') -Filter '*.sql' | Sort-Object Name)
+    {
+        # 파일 이름이 SQL 문장에 들어가므로 형식을 제한 (001_account.sql)
+        if ($file.Name -notmatch '^(\d{3})_[A-Za-z0-9_]+\.sql$') { throw "Invalid migration file name '$($file.Name)' (NNN_name.sql)" }
+        $version = [int]$matches[1]
+        if ($version -le $currentVersion) { continue }
+
+        $count = Invoke-SqlFile -Connection $conn -Path $file.FullName
+        $cmd.CommandText = "INSERT INTO schema_version (version, file_name) VALUES ($version, '$($file.Name)')"
+        [void]$cmd.ExecuteNonQuery()
+        Write-Host "Applied migration $($file.Name) ($count statements)"
+        $applied++
+    }
+    if ($applied -eq 0) { Write-Host "Migrations up to date (version $currentVersion)" }
 
     # 테스트용 덮어쓰기 (Data/*.sql을 다시 적용하면 원래 값으로 돌아감)
     foreach ($sql in $ExtraSql)

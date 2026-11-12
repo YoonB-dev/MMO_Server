@@ -62,22 +62,29 @@ function Invoke-SolutionBuild
     Write-Host "Building MMO_Server.sln ($Configuration|x64) ..."
     & $msbuild (Join-Path $script:RepoRoot 'MMO_Server.sln') "/p:Configuration=$Configuration" '/p:Platform=x64' '/m' '/v:minimal' '/nologo' | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Build failed (exit code $LASTEXITCODE)" }
+
+    # 아웃게임 서버(.NET)는 C++ 솔루션과 따로 빌드
+    Write-Host "Building OutGameServer ($Configuration) ..."
+    & dotnet build (Join-Path $script:RepoRoot 'OutGameServer') -c $Configuration -nologo -v q | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "OutGameServer build failed (exit code $LASTEXITCODE)" }
 }
 
 # ==================== 프로세스 ====================
 
+# -Exe: Binary/<구성>/ 안의 실행 파일 이름 (GameServer, DummyClient)
+# -ExePath: 그 밖의 실행 파일 전체 경로 (OutGameServer). 작업 폴더는 실행 파일이 있는 폴더 (설정 파일을 거기서 읽음)
 function Start-TestProcess
 {
-    param([string]$Name, [string]$Exe, [string]$Arguments)
+    param([string]$Name, [string]$Exe, [string]$Arguments, [string]$ExePath)
 
     if ($script:Processes.Contains($Name)) { throw "Process name '$Name' is already used in this scenario" }
 
-    $exePath = Join-Path (Get-BinDir) $Exe
-    if (-not (Test-Path $exePath)) { throw "$Exe not found: $exePath (build first, or run with -Build)" }
+    if (-not $ExePath) { $ExePath = Join-Path (Get-BinDir) $Exe }
+    if (-not (Test-Path $ExePath)) { throw "$(Split-Path $ExePath -Leaf) not found: $ExePath (build first, or run with -Build)" }
 
     $startArgs = @{
-        FilePath               = $exePath
-        WorkingDirectory       = Get-BinDir
+        FilePath               = $ExePath
+        WorkingDirectory       = Split-Path $ExePath -Parent
         NoNewWindow            = $true
         PassThru               = $true
         RedirectStandardOutput = Join-Path $script:LogDir "$Name.txt"
@@ -114,6 +121,63 @@ function Start-GameServer
         Start-Sleep -Milliseconds 100
     }
     throw "GameServer did not start within $TimeoutSec s"
+}
+
+# 아웃게임 서버(.NET) 실행 후 "Now listening on" 로그가 뜰 때까지 대기. 로그 이름은 'outgame'
+#   비밀값(DB 연결, JWT 키)은 user-secrets에서 읽음 -> 처음 한 번 OutGameServer/Setup-Secrets.ps1 필요
+function Start-OutGameServer
+{
+    param([int]$TimeoutSec = 20)
+
+    $exePath = Join-Path $script:RepoRoot "OutGameServer\bin\$script:Config\net10.0\OutGameServer.exe"
+    $process = Start-TestProcess -Name 'outgame' -ExePath $exePath
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+
+    while ((Get-Date) -lt $deadline)
+    {
+        if ((Get-LogMatchCount -Name 'outgame' -Pattern 'Now listening on') -gt 0)
+        {
+            Write-Host '  outgame server started'
+            return
+        }
+        if ($process.HasExited)
+        {
+            $log = @(Get-Content (Join-Path $script:LogDir 'outgame.txt') -ErrorAction SilentlyContinue) +
+                   @(Get-Content (Join-Path $script:LogDir 'outgame.err.txt') -ErrorAction SilentlyContinue)
+            throw "OutGameServer exited during startup (exit $($process.ExitCode)): $(($log | Select-Object -Last 3) -join ' / ')"
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "OutGameServer did not start within $TimeoutSec s"
+}
+
+# 아웃게임 서버 API 호출 (POST JSON). 4xx/5xx도 예외 없이 @{ Status; Body } 로 돌려줌
+#   주소는 OutGameServer/appsettings.json의 Kestrel 주소
+function Invoke-AuthApi
+{
+    param([string]$Path, [hashtable]$Body)
+
+    # PowerShell 5.1 기본값에는 TLS 1.2가 빠져 있을 수 있음 (Kestrel은 TLS 1.2 이상)
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+    $uri = "https://localhost:7100$Path"
+    $json = $Body | ConvertTo-Json -Compress
+    try
+    {
+        $response = Invoke-WebRequest -Uri $uri -Method Post -ContentType 'application/json' -Body $json -UseBasicParsing
+        $content = if ($response.Content) { $response.Content | ConvertFrom-Json } else { $null }
+        return @{ Status = [int]$response.StatusCode; Body = $content }
+    }
+    catch [System.Net.WebException]
+    {
+        $errorResponse = $_.Exception.Response
+        if ($null -eq $errorResponse) { throw }   # 연결 자체가 안 됨 (서버 꺼짐, 인증서 문제)
+
+        $reader = New-Object System.IO.StreamReader($errorResponse.GetResponseStream())
+        $text = $reader.ReadToEnd()
+        $content = if ($text) { $text | ConvertFrom-Json } else { $null }
+        return @{ Status = [int]$errorResponse.StatusCode; Body = $content }
+    }
 }
 
 # 이름 붙인 DummyClient 그룹 실행 (프로세스 하나에 Count명). 추가 옵션은 -Arguments로 전달
@@ -202,6 +266,24 @@ function Assert-LogNotContains
     $actual = Get-LogMatchCount -Name $Name -Pattern $Pattern
     if ($actual -eq 0) { Write-Host "  [ok] [$Name] has no '$Pattern'" -ForegroundColor Green }
     else { Add-TestFailure "[$Name] contains '$Pattern' x $actual" }
+}
+
+# 로그가 아니라 값으로 확인할 때 (API 응답 코드 등)
+function Assert-That
+{
+    param([bool]$Condition, [string]$Message)
+
+    if ($Condition) { Write-Host "  [ok] $Message" -ForegroundColor Green }
+    else { Add-TestFailure $Message }
+}
+
+function Assert-ProcessAlive
+{
+    param([string]$Name)
+
+    $process = $script:Processes[$Name]
+    if ($process -and -not $process.HasExited) { Write-Host "  [ok] $Name alive" -ForegroundColor Green }
+    else { Add-TestFailure "$Name is not running (crashed or exited)" }
 }
 
 function Assert-ServerAlive

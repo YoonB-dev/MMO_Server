@@ -26,6 +26,10 @@ GameServer/config.ini
 # 테스트 실행 로그 (Test/Run-Test.ps1)
 Test/logs/
 
+# OutGameServer (.NET) 빌드 결과. 비밀값(DB 연결, JWT 키)은 dotnet user-secrets라 저장소 밖에 있음
+OutGameServer/bin/
+OutGameServer/obj/
+
 # Python (Tools/PacketGenerator)
 __pycache__/
 Tools/PacketGenerator/build/
