@@ -105,13 +105,14 @@ function Start-TestProcess
 
 # 서버 실행 후 "listening" 로그가 뜰 때까지 대기. 실패하면 시나리오 중단(throw)
 #   DummyClient가 아웃게임 서버에서 로그인한 토큰으로 입장하므로, 아웃게임 서버가 아직 없으면 먼저 띄움
+#   -Arguments: GameServer 실행 인자 (예: '--save-interval-sec 2')
 function Start-GameServer
 {
-    param([int]$TimeoutSec = 10)
+    param([int]$TimeoutSec = 10, [string]$Arguments = '')
 
     if (-not $script:Processes.Contains('outgame')) { Start-OutGameServer }
 
-    $process = Start-TestProcess -Name 'server' -Exe 'GameServer.exe'
+    $process = Start-TestProcess -Name 'server' -Exe 'GameServer.exe' -Arguments $Arguments
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
 
     while ((Get-Date) -lt $deadline)
@@ -232,11 +233,13 @@ function New-TestJwt
 
 # 이름 붙인 DummyClient 그룹 실행 (프로세스 하나에 Count명). 추가 옵션은 -Arguments로 전달
 #   계정 이름 = <그룹 이름><시나리오 시각>_<번호> (없으면 DummyClient가 가입부터 함). --token을 넘기면 로그인 없이 그 값으로 입장
+#   -AccountOf: 다른 그룹과 같은 계정으로 접속 (그 그룹 이름). 중복 로그인 / 재접속 테스트용
 function Start-DummyClients
 {
-    param([string]$Name, [int]$Count = 1, [string]$Arguments = '')
+    param([string]$Name, [int]$Count = 1, [string]$Arguments = '', [string]$AccountOf)
 
-    $null = Start-TestProcess -Name $Name -Exe 'DummyClient.exe' -Arguments "--count $Count --account-prefix $Name$script:RunStamp $Arguments".Trim()
+    $accountGroup = if ($AccountOf) { $AccountOf } else { $Name }
+    $null = Start-TestProcess -Name $Name -Exe 'DummyClient.exe' -Arguments "--count $Count --account-prefix $accountGroup$script:RunStamp $Arguments".Trim()
     Write-Host "  clients '$Name' started (count $Count)"
 }
 
@@ -290,6 +293,19 @@ function Wait-LogCount
     }
     $actual = Get-LogMatchCount -Name $Name -Pattern $Pattern
     Add-TestFailure "[$Name] timed out waiting for '$Pattern': $actual / $Expected lines"
+}
+
+# 패턴의 첫 번째 괄호 그룹을 숫자로 꺼냄 (마지막으로 나온 줄 기준). 없으면 $null
+#   예: Get-LogNumber -Name A -Pattern 'MOVE_TEST ok x=([-\d.]+)'
+function Get-LogNumber
+{
+    param([string]$Name, [string]$Pattern)
+
+    $path = Join-Path $script:LogDir "$Name.txt"
+    if (-not (Test-Path $path)) { return $null }
+    $match = Select-String -Path $path -Pattern $Pattern | Select-Object -Last 1
+    if (-not $match) { return $null }
+    return [double]$match.Matches[0].Groups[1].Value
 }
 
 function Assert-LogCount

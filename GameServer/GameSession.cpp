@@ -23,9 +23,9 @@ void GameSession::OnDisconnected()
 		_player = nullptr;
 	}
 
-	// 입장한 상태였으면 방에서 내보냄 (실제 제거는 Room의 JobQueue에서). DoAsync는 락 밖에서
+	// 입장한 상태였으면 방에서 내보냄 (실제 제거와 저장 요청은 Room의 JobQueue에서). DoAsync는 락 밖에서
 	if (player != nullptr)
-		GRoom->DoAsync(&Room::Leave, player->GetObjectId());
+		GRoom->DoAsync(&Room::Leave, player);
 }
 
 PlayerRef GameSession::GetPlayer()
@@ -45,7 +45,7 @@ bool GameSession::SetPlayer(PlayerRef player)
 
 void GameSession::FailEnter(Protocol::EnterGameError error)
 {
-	cout << "[Enter] rejected: error " << static_cast<int32>(error) << endl;
+	LogLine() << "[Enter] rejected: error " << static_cast<int32>(error);
 
 	Protocol::S_ENTER_GAME pkt;
 	pkt.set_success(false);

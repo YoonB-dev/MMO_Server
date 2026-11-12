@@ -6,6 +6,7 @@
 #include "ClientPacketHandler.h"
 #include "MoveSendPolicy.h"
 #include "GameData.h"
+#include "DBQueue.h"
 #include <cmath>
 #include <algorithm>
 #include <chrono>
@@ -18,6 +19,11 @@
 //   1초마다   ResetInputCounts, UpdatePlayerStats (자연 회복)
 //   매 틱     UpdatePlayers (입력 적용 -> 이동) -> UpdateMonsters (AI) -> 바뀐 이동을 S_MOVE 하나로 전송
 //   10초마다  LogStats (틱 간격, 처리 시간, 몬스터 전송 수, 스킬 거절/빗나감 수)
+//   60초마다  SaveAllPlayers (전원 값을 복사해서 DB 줄로. 틱은 DB를 기다리지 않음)
+//
+// 입장 / 퇴장
+//   DB 줄(LoadCharacter)이 캐릭터를 불러온 뒤 Enter -> S_ENTER_GAME, S_SPAWN
+//   끊기면 Leave -> S_DESPAWN + 값을 복사해서 DB 줄(LeaveCharacter)에 저장 요청
 //
 // 전투 (C_SKILL -> HandleSkill)
 //   검사 6개 (타겟 문제는 대상 필수 스킬이면 거절, 아니면 빗나감) -> 확정(쿨타임, MP) -> S_SKILL
@@ -32,7 +38,7 @@ RoomRef GRoom;
 void Room::SetMonsterSendPolicy(const MoveSendPolicy* policy)
 {
 	_monsterSendPolicy = policy;
-	cout << "[Room] monster send policy: " << policy->Name() << endl;
+	LogLine() << "[Room] monster send policy: " << policy->Name();
 }
 
 void Room::Start()
@@ -60,8 +66,8 @@ void Room::SpawnMonster(MonsterSpawnData spawn)
 	MonsterRef monster = MakeShared<Monster>(*data, spawn);
 	_monsters[monster->GetObjectId()] = monster;
 
-	cout << "[Room] spawn monster " << monster->GetObjectId() << " (type " << spawn.monsterId << ")"
-		<< " at (" << spawn.x << ", " << spawn.z << ")" << endl;
+	LogLine() << "[Room] spawn monster " << monster->GetObjectId() << " (type " << spawn.monsterId << ")"
+		<< " at (" << spawn.x << ", " << spawn.z << ")";
 
 	// 이미 방에 있는 사람들에게 (서버 시작 때는 아무도 없어서 패킷을 만들지 않음)
 	if (_players.empty() == false)
@@ -84,6 +90,9 @@ void Room::Tick()
 		ResetInputCounts();
 		UpdatePlayerStats();
 	}
+
+	if (_tick % _saveIntervalTicks == 0)
+		SaveAllPlayers();
 
 	// 이번 틱에 바뀐 이동을 한 패킷에 모아서 전체(본인 포함)에 전송
 	//   플레이어 먼저 -> 몬스터는 이번 틱에 움직인 플레이어 위치를 보고 판단
@@ -122,9 +131,9 @@ void Room::LogStats(uint64 now)
 	const double workAvgMs = _workTimeSumUs / 1000.0 / TICK_LOG_INTERVAL;
 	const double workMaxMs = _workTimeMaxUs / 1000.0;
 
-	cout << "[Room] tick " << _tick << ", avg interval " << avgMs << "ms"
+	LogLine() << "[Room] tick " << _tick << ", avg interval " << avgMs << "ms"
 		<< ", work avg " << workAvgMs << "ms max " << workMaxMs << "ms"
-		<< ", monster moves " << _monsterMovesSent << " (" << _monsterSendPolicy->Name() << ")" << endl;
+		<< ", monster moves " << _monsterMovesSent << " (" << _monsterSendPolicy->Name() << ")";
 
 	// 스킬 거절 / 빗나감: 이 구간에 하나라도 있었을 때만 출력
 	//   거절은 정상 플레이에서 거의 0 (핵 의심용), 빗나감은 허공 공격이라 정상 플레이에서도 생김
@@ -132,16 +141,16 @@ void Room::LogStats(uint64 now)
 	const TargetFailStats& rt = r.target;
 	if (r.dead + r.unknownSkill + r.cooldown + r.noMp + rt.noTarget + rt.badTarget + rt.invulnerable + rt.outOfRange > 0)
 	{
-		cout << "[Room] skill rejects: dead " << r.dead << ", unknown-skill " << r.unknownSkill << ", cooldown " << r.cooldown
+		LogLine() << "[Room] skill rejects: dead " << r.dead << ", unknown-skill " << r.unknownSkill << ", cooldown " << r.cooldown
 			<< ", no-mp " << r.noMp << ", no-target " << rt.noTarget << ", bad-target " << rt.badTarget
-			<< ", invulnerable " << rt.invulnerable << ", out-of-range " << rt.outOfRange << endl;
+			<< ", invulnerable " << rt.invulnerable << ", out-of-range " << rt.outOfRange;
 	}
 
 	const TargetFailStats& m = _skillMisses;
 	if (m.noTarget + m.badTarget + m.invulnerable + m.outOfRange > 0)
 	{
-		cout << "[Room] skill misses: no-target " << m.noTarget << ", bad-target " << m.badTarget
-			<< ", invulnerable " << m.invulnerable << ", out-of-range " << m.outOfRange << endl;
+		LogLine() << "[Room] skill misses: no-target " << m.noTarget << ", bad-target " << m.badTarget
+			<< ", invulnerable " << m.invulnerable << ", out-of-range " << m.outOfRange;
 	}
 
 	_logStartTime = now;
@@ -197,14 +206,40 @@ void Room::Enter(PlayerRef player)
 	}
 }
 
-void Room::Leave(uint64 objectId)
+void Room::Leave(PlayerRef player)
 {
-	if (_players.erase(objectId) == 0)
-		return;	// 이미 나간 플레이어
+	const uint64 id = player->GetObjectId();
+	if (_players.erase(id) > 0)
+	{
+		Protocol::S_DESPAWN pkt;
+		pkt.add_object_ids(id);
+		Broadcast(ClientPacketHandler::MakeSendBuffer(pkt), id);
+	}
 
-	Protocol::S_DESPAWN pkt;
-	pkt.add_object_ids(objectId);
-	Broadcast(ClientPacketHandler::MakeSendBuffer(pkt), objectId);
+	// 방에 없었어도(Enter보다 Leave가 먼저 온 경우) 저장 + 접속 목록 정리는 반드시
+	//   안 보내면 DB 줄의 접속 목록에 계속 남아서 그 계정이 다시 못 들어옴
+	//   값은 지금 복사해서 넘김 (DB 줄은 이 복사본만 봄 -> Player를 같이 만지지 않음)
+	GDBQueue->DoAsync(&DBQueue::LeaveCharacter, player->ToCharacterData());
+}
+
+void Room::SetSaveInterval(uint64 seconds)
+{
+	_saveIntervalTicks = (seconds > 0 ? seconds : 1) * TICKS_PER_SECOND;	// 0이면 % 0이 돼서 최소 1초
+}
+
+// 주기 저장: 전원의 지금 값을 복사해서 한 번에 넘김 (Room 줄은 DB를 기다리지 않음)
+//   Room은 한 줄이라 "주기 저장 복사 -> Leave 복사" 순서로 DB 줄에 들어감 -> 옛 값이 나중 값을 덮어쓰지 않음
+void Room::SaveAllPlayers()
+{
+	if (_players.empty())
+		return;
+
+	xvector<CharacterData> rows;
+	rows.reserve(_players.size());
+	for (auto& [id, player] : _players)
+		rows.push_back(player->ToCharacterData());
+
+	GDBQueue->DoAsync(&DBQueue::SaveCharacters, rows);
 }
 
 void Room::HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 buttons, uint32 seq)
@@ -524,8 +559,8 @@ void Room::MovePlayer(const PlayerRef& player)
 
 void Room::RejectInput(PlayerRef player, uint32 seq, const char* reason)
 {
-	cout << "[Room] reject input: player " << player->GetObjectId()
-		<< ", seq " << seq << ", reason " << reason << endl;
+	LogLine() << "[Room] reject input: player " << player->GetObjectId()
+		<< ", seq " << seq << ", reason " << reason;
 }
 
 // target의 HP를 깎고(0 아래로는 안 내려감) 모두에게 알림. 죽음 처리는 호출한 쪽에서 (HandleSkill / HitPlayer)
@@ -581,8 +616,8 @@ void Room::KillMonster(MonsterRef monster, uint64 killerId)
 	Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
 
 	const MonsterSpawnData& spawn = monster->GetSpawn();
-	cout << "[Room] monster " << monsterId << " killed by " << killerId
-		<< ", respawn in " << spawn.respawnMs << "ms (spawn " << spawn.spawnId << ")" << endl;
+	LogLine() << "[Room] monster " << monsterId << " killed by " << killerId
+		<< ", respawn in " << spawn.respawnMs << "ms (spawn " << spawn.spawnId << ")";
 
 	// 같은 객체를 되살리지 않고 respawn_ms 뒤에 새 id로 만듦. spawn은 예약된 job 안에 복사돼서 monster가 지워져도 안전
 	DoTimer(static_cast<uint64>(spawn.respawnMs), &Room::SpawnMonster, spawn);
@@ -611,8 +646,8 @@ void Room::KillPlayer(const PlayerRef& player, uint64 killerId)
 	pkt.set_revive_ms(static_cast<int32>(Player::REVIVE_DELAY_MS));
 	Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
 
-	cout << "[Room] player " << player->GetObjectId() << " killed by " << killerId
-		<< ", revive in " << Player::REVIVE_DELAY_MS << "ms" << endl;
+	LogLine() << "[Room] player " << player->GetObjectId() << " killed by " << killerId
+		<< ", revive in " << Player::REVIVE_DELAY_MS << "ms";
 
 	// PlayerRef가 아니라 id로 예약: 5초 사이에 나가면 RevivePlayer가 못 찾고 끝남
 	//   (PlayerRef를 넘기면 job이 shared_ptr 복사본을 들고 있어서, 나간 플레이어 객체가 5초 동안 안 지워짐)
@@ -633,7 +668,7 @@ void Room::RevivePlayer(uint64 playerId)
 	Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
 	SendMp(player);
 
-	cout << "[Room] player " << playerId << " revived at (" << Player::SPAWN_X << ", " << Player::SPAWN_Z << ")" << endl;
+	LogLine() << "[Room] player " << playerId << " revived at (" << Player::SPAWN_X << ", " << Player::SPAWN_Z << ")";
 }
 
 void Room::Broadcast(SendBufferRef sendBuffer, uint64 exceptId)

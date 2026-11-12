@@ -41,7 +41,7 @@ static bool LoadMonsters(DBConnection& db)
 		row.skill = FindSkillData(row.skillId);
 		if (row.skill == nullptr)
 		{
-			cout << "[GameData] monster " << row.monsterId << ": unknown skill_id " << row.skillId << endl;
+			LogLine() << "[GameData] monster " << row.monsterId << ": unknown skill_id " << row.skillId;
 			return false;
 		}
 		s_monsters[row.monsterId] = row;	// 복사해서 저장 (row는 다음 Fetch에서 덮어써짐)
@@ -69,7 +69,7 @@ static bool LoadMonsterSpawns(DBConnection& db)
 		// DB의 FK가 이미 막지만, 서버도 한 번 더 확인 (SpawnMonsters가 nullptr을 받지 않게)
 		if (FindMonsterData(row.monsterId) == nullptr)
 		{
-			cout << "[GameData] spawn " << row.spawnId << ": unknown monster_id " << row.monsterId << endl;
+			LogLine() << "[GameData] spawn " << row.spawnId << ": unknown monster_id " << row.monsterId;
 			return false;
 		}
 		s_spawns.push_back(row);
@@ -110,19 +110,19 @@ bool LoadGameData()
 	DBConnectionGuard db(GDBConnectionPool);
 	if (!db)
 	{
-		cout << "[GameData] no free DB connection" << endl;
+		LogLine() << "[GameData] no free DB connection";
 		return false;
 	}
 
 	// 순서 중요: 몬스터가 스킬을, 스폰이 몬스터 종류를 확인하므로 스킬 -> 몬스터 -> 스폰
 	if (LoadSkills(db) == false || LoadMonsters(db) == false || LoadMonsterSpawns(db) == false)
 	{
-		cout << "[GameData] failed to load (run Database/Setup-Database.ps1 to create data tables)" << endl;
+		LogLine() << "[GameData] failed to load (run Database/Setup-Database.ps1 to create data tables)";
 		return false;
 	}
 
-	cout << "[GameData] loaded " << s_monsters.size() << " monsters, " << s_spawns.size() << " spawns, "
-		<< s_skills.size() << " skills" << endl;
+	LogLine() << "[GameData] loaded " << s_monsters.size() << " monsters, " << s_spawns.size() << " spawns, "
+		<< s_skills.size() << " skills";
 	return true;
 }
 

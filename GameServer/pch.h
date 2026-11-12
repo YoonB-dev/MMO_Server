@@ -11,6 +11,7 @@
 #endif
 
 #include "CorePch.h"
+#include "LogLine.h"	// 서버 로그 한 줄 (여러 스레드가 찍어도 안 섞임)
 
 using GameSessionRef = std::shared_ptr<class GameSession>;
 using GameObjectRef = std::shared_ptr<class GameObject>;

@@ -154,7 +154,7 @@ void Monster::UpdateAttack(Room& room, float dt)
 		return;
 
 	const bool hit = IsInHitArea(*target->GetPosInfo());
-	cout << "[Monster " << GetObjectId() << "] attack " << (hit ? "hit" : "miss") << " target " << _targetId << endl;
+	LogLine() << "[Monster " << GetObjectId() << "] attack " << (hit ? "hit" : "miss") << " target " << _targetId;
 	if (hit)
 		room.HitPlayer(target, GetObjectId(), _data.skill->damage);	// HP 0이면 Room이 죽음 처리
 
@@ -202,7 +202,7 @@ void Monster::OnDamaged(uint64 attackerId)
 	if (_state != MonsterState::Idle && _state != MonsterState::Patrol)
 		return;
 
-	cout << "[Monster " << GetObjectId() << "] aggro on " << attackerId << endl;
+	LogLine() << "[Monster " << GetObjectId() << "] aggro on " << attackerId;
 	_targetId = attackerId;
 	SetState(MonsterState::Chase);	// 다음 틱 UpdateChase가 FindPlayer(_targetId)로 쫓기 시작
 }
@@ -223,7 +223,7 @@ bool Monster::TryDetect(Room& room)
 // Chase를 포기하고 스폰으로 (reason은 로그용: left / dead / leash / lost)
 void Monster::GiveUpChase(const char* reason)
 {
-	cout << "[Monster " << GetObjectId() << "] give up target " << _targetId << " (" << reason << ")" << endl;
+	LogLine() << "[Monster " << GetObjectId() << "] give up target " << _targetId << " (" << reason << ")";
 	SetState(MonsterState::Return);
 }
 
@@ -252,9 +252,9 @@ void Monster::SetState(MonsterState next)
 	}
 
 	Protocol::PosInfo* pos = GetPosInfo();
-	cout << "[Monster " << GetObjectId() << "] " << ToString(prev) << " -> " << ToString(next)
+	LogLine() << "[Monster " << GetObjectId() << "] " << ToString(prev) << " -> " << ToString(next)
 		<< " at (" << pos->x() << ", " << pos->z() << ")"
-		<< (next == MonsterState::Chase || next == MonsterState::Attack ? " target " + to_string(_targetId) : "") << endl;
+		<< (next == MonsterState::Chase || next == MonsterState::Attack ? " target " + to_string(_targetId) : "");
 }
 
 // (x, z)를 향해 speed로 한 틱만큼 이동. 이번 틱에 도착하면 그 자리에 멈추고 true
