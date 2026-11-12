@@ -35,7 +35,7 @@ void DBQueue::LoadCharacter(GameSessionRef session, int64 accountId)
 
 	if (ok == false)
 	{
-		cout << "[DB] failed to load character: account " << accountId << endl;	// 이유는 바로 위 [ODBC Error]
+		LogLine() << "[DB] failed to load character: account " << accountId;	// 이유는 바로 위 [ODBC Error]
 		session->FailEnter(Protocol::ENTER_GAME_ERROR_SERVER_ERROR);
 		return;
 	}
@@ -44,7 +44,7 @@ void DBQueue::LoadCharacter(GameSessionRef session, int64 accountId)
 	if (session->SetPlayer(player) == false)
 		return;		// 불러오는 사이 끊김 -> 입장시키지 않음
 
-	cout << "[DB] loaded character: account " << accountId << endl;
+	LogLine() << "[DB] loaded character: account " << accountId;
 	GRoom->DoAsync(&Room::Enter, player);	// 입장 처리는 Room 줄에서 (세션이 아직 연결돼 있는지 한 번 더 봄)
 }
 

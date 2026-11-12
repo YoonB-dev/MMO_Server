@@ -14,7 +14,7 @@ PacketHandleFunc GPacketHandler[UINT16_MAX];
 bool Handle_INVALID(PacketSessionRef& session, BYTE* buffer, int32 len)
 {
 	PacketHeader* header = reinterpret_cast<PacketHeader*>(buffer);
-	cout << "Invalid packet received - ID: " << header->id << ", Size: " << header->size << endl;
+	LogLine() << "Invalid packet received - ID: " << header->id << ", Size: " << header->size;
 	return false;
 }
 

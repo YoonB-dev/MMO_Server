@@ -88,11 +88,11 @@ bool InitAuth()
 
 	if (GJwtVerifier.Init(secret, issuer, audience) == false)
 	{
-		cout << "[Auth] config.ini [Auth] JwtSecret / Issuer / Audience is missing or invalid (run OutGameServer/Setup-Secrets.ps1)" << endl;
+		LogLine() << "[Auth] config.ini [Auth] JwtSecret / Issuer / Audience is missing or invalid (run OutGameServer/Setup-Secrets.ps1)";
 		return false;
 	}
 
-	cout << "[Auth] JWT verifier ready (issuer " << issuer << ", audience " << audience << ")" << endl;
+	LogLine() << "[Auth] JWT verifier ready (issuer " << issuer << ", audience " << audience << ")";
 	return true;
 }
 
@@ -144,7 +144,7 @@ const MoveSendPolicy* ParseMonsterSendPolicy(int argc, char* argv[])
 
 	const MoveSendPolicy* policy = FindMoveSendPolicy(name);
 	if (policy == nullptr)
-		cout << "Unknown --monster-send: " << name << " (angle | every-tick)" << endl;
+		LogLine() << "Unknown --monster-send: " << name << " (angle | every-tick)";
 	return policy;
 }
 

@@ -45,7 +45,7 @@ bool GameSession::SetPlayer(PlayerRef player)
 
 void GameSession::FailEnter(Protocol::EnterGameError error)
 {
-	cout << "[Enter] rejected: error " << static_cast<int32>(error) << endl;
+	LogLine() << "[Enter] rejected: error " << static_cast<int32>(error);
 
 	Protocol::S_ENTER_GAME pkt;
 	pkt.set_success(false);
