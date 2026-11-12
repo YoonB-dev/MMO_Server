@@ -7,6 +7,7 @@ $script:LogDir    = $null
 $script:Processes = [ordered]@{}   # 이름 -> Process ('server', 'A', 'B' ...)
 $script:Failures  = New-Object System.Collections.Generic.List[string]
 $script:GameDataOverridden = $false   # 이 시나리오가 Set-GameData로 기획 데이터를 바꿨는지 (끝나면 Run-Test가 복구)
+$script:RunStamp  = ''                # 시나리오마다 새로 정하는 시각 (DummyClient 계정 이름에 붙여서 시나리오끼리 캐릭터를 안 나눠 씀)
 
 # ==================== 실행 준비 (Run-Test.ps1에서 호출) ====================
 
@@ -19,10 +20,14 @@ function Initialize-TestContext
     $script:Processes = [ordered]@{}
     $script:Failures  = New-Object System.Collections.Generic.List[string]
     $script:GameDataOverridden = $false
+    $script:RunStamp  = Get-Date -Format 'MMddHHmmss'
     New-Item -ItemType Directory -Force $LogDir | Out-Null
 }
 
 function Test-GameDataOverridden { return $script:GameDataOverridden }
+
+# 시나리오 파일에서 쓰는 이번 시나리오의 시각 (모듈 변수라 시나리오에서 $script:로는 안 보임)
+function Get-RunStamp { return $script:RunStamp }
 
 # ==================== 기획 데이터 ====================
 
@@ -99,9 +104,12 @@ function Start-TestProcess
 }
 
 # 서버 실행 후 "listening" 로그가 뜰 때까지 대기. 실패하면 시나리오 중단(throw)
+#   DummyClient가 아웃게임 서버에서 로그인한 토큰으로 입장하므로, 아웃게임 서버가 아직 없으면 먼저 띄움
 function Start-GameServer
 {
     param([int]$TimeoutSec = 10)
+
+    if (-not $script:Processes.Contains('outgame')) { Start-OutGameServer }
 
     $process = Start-TestProcess -Name 'server' -Exe 'GameServer.exe'
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
@@ -180,12 +188,55 @@ function Invoke-AuthApi
     }
 }
 
+# 테스트용 Access Token(JWT)을 직접 만듦 (토큰 공격 시나리오용)
+#   기본값은 아웃게임 서버가 발급하는 것과 같은 모양: HS256, 게임 서버 config.ini [Auth]의 비밀키, iss/aud, 15분
+#   -ExpOffsetSec 음수 = 이미 만료, -Alg none = 서명 없는 토큰, -SecretBase64 = 다른 키로 서명
+function New-TestJwt
+{
+    param(
+        [string]$Sub = '1',
+        [int]$ExpOffsetSec = 900,
+        [ValidateSet('HS256', 'none')]
+        [string]$Alg = 'HS256',
+        [string]$SecretBase64,
+        [string]$Issuer = 'MMO-Auth',
+        [string]$Audience = 'MMO-Game'
+    )
+
+    function ConvertTo-Base64Url([byte[]]$Bytes)
+    {
+        return [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    }
+
+    if (-not $SecretBase64)
+    {
+        # 게임 서버가 실제로 읽는 파일 (실행 폴더에 복사된 config.ini)
+        $configPath = Join-Path (Get-BinDir) 'config.ini'
+        $line = Get-Content $configPath -Encoding UTF8 | Where-Object { $_ -match '^\s*JwtSecret\s*=' } | Select-Object -First 1
+        if (-not $line) { throw "JwtSecret not found in $configPath (run OutGameServer/Setup-Secrets.ps1)" }
+        $SecretBase64 = ($line -split '=', 2)[1].Trim()
+    }
+
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $header = @{ alg = $Alg; typ = 'JWT' } | ConvertTo-Json -Compress
+    $payload = [ordered]@{ iss = $Issuer; aud = $Audience; sub = $Sub; iat = $now; nbf = $now; exp = $now + $ExpOffsetSec } | ConvertTo-Json -Compress
+
+    $signingInput = (ConvertTo-Base64Url ([Text.Encoding]::UTF8.GetBytes($header))) + '.' + (ConvertTo-Base64Url ([Text.Encoding]::UTF8.GetBytes($payload)))
+    if ($Alg -eq 'none') { return "$signingInput." }
+
+    $hmac = New-Object System.Security.Cryptography.HMACSHA256 (, [Convert]::FromBase64String($SecretBase64))
+    $signature = $hmac.ComputeHash([Text.Encoding]::ASCII.GetBytes($signingInput))
+    $hmac.Dispose()
+    return "$signingInput." + (ConvertTo-Base64Url $signature)
+}
+
 # 이름 붙인 DummyClient 그룹 실행 (프로세스 하나에 Count명). 추가 옵션은 -Arguments로 전달
+#   계정 이름 = <그룹 이름><시나리오 시각>_<번호> (없으면 DummyClient가 가입부터 함). --token을 넘기면 로그인 없이 그 값으로 입장
 function Start-DummyClients
 {
     param([string]$Name, [int]$Count = 1, [string]$Arguments = '')
 
-    $null = Start-TestProcess -Name $Name -Exe 'DummyClient.exe' -Arguments "--count $Count $Arguments".Trim()
+    $null = Start-TestProcess -Name $Name -Exe 'DummyClient.exe' -Arguments "--count $Count --account-prefix $Name$script:RunStamp $Arguments".Trim()
     Write-Host "  clients '$Name' started (count $Count)"
 }
 

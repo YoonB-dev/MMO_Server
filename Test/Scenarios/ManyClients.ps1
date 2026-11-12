@@ -4,7 +4,7 @@ $count = 100
 Start-GameServer
 
 Start-DummyClients -Name A -Count $count -Arguments '--no-ping'
-Wait-LogCount -Name A -Pattern 'S_ENTER_GAME success=1' -Expected $count -TimeoutSec 20
+Wait-LogCount -Name A -Pattern 'S_ENTER_GAME success=1' -Expected $count -TimeoutSec 40
 Assert-LogCount -Name A -Pattern 'S_ENTER_GAME success=1' -Expected $count
 
 Stop-DummyClients -Name A

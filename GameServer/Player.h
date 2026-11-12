@@ -10,7 +10,17 @@ struct MoveInput
 	uint32	seq = 0;		// 클라가 붙인 입력 번호 1, 2, 3 ...
 };
 
-// 플레이어 = 월드 객체 + 접속 중인 세션
+// DB player_character 한 줄 (계정당 캐릭터 1개). DB 큐가 불러와서 Player를 만들 때 씀
+struct CharacterData
+{
+	int64	accountId = 0;
+	float	x = 0.f;
+	float	z = 0.f;
+	int32	hp = 0;
+	int32	mp = 0;
+};
+
+// 플레이어 = 월드 객체 + 접속 중인 세션 + 계정
 class Player : public GameObject
 {
 	// 플레이어 기본 수치 (몬스터, 스킬과 달리 DB가 아니라 코드 상수)
@@ -37,14 +47,26 @@ public:
 	};
 
 public:
-	Player(GameSessionRef session)
-		: GameObject(Protocol::OBJECT_TYPE_PLAYER), _session(session)
+	// DB에서 불러온 값으로 만듦. 값이 범위를 벗어나 있어도(DB를 손으로 고친 경우 등) 서버가 망가지지 않게 잘라서 씀
+	//   HP 0(죽은 채로 저장됨)이면 시작 위치에서 HP 가득으로 (부활과 같은 처리)
+	Player(GameSessionRef session, const CharacterData& data)
+		: GameObject(Protocol::OBJECT_TYPE_PLAYER), _session(session), _accountId(data.accountId)
 	{
-		GetPosInfo()->set_x(SPAWN_X);
-		GetPosInfo()->set_z(SPAWN_Z);
-		GetStatInfo()->set_hp(MAX_HP);
+		const bool dead = (data.hp <= 0);
+		GetPosInfo()->set_x(dead ? SPAWN_X : data.x);
+		GetPosInfo()->set_z(dead ? SPAWN_Z : data.z);
+		GetStatInfo()->set_hp(dead ? MAX_HP : (data.hp > MAX_HP ? MAX_HP : data.hp));
 		GetStatInfo()->set_max_hp(MAX_HP);
+		mp = (data.mp < 0) ? 0 : (data.mp > MAX_MP ? MAX_MP : data.mp);
 	}
+
+	// 처음 들어온 계정의 캐릭터: 시작 위치, HP / MP 가득 (DB 큐가 player_character에 넣음)
+	static CharacterData NewCharacter(int64 accountId)
+	{
+		return CharacterData{ accountId, SPAWN_X, SPAWN_Z, MAX_HP, MAX_MP };
+	}
+
+	int64	GetAccountId() const { return _accountId; }
 
 	// 연결이 이미 끊겼으면 nullptr
 	GameSessionRef	GetSession() { return _session.lock(); }
@@ -108,4 +130,5 @@ public:
 
 private:
 	weak_ptr<GameSession>	_session;	// 세션이 Player를 shared_ptr로 들고 있으므로 이쪽은 weak (순환 참조 방지)
+	int64					_accountId = 0;	// 토큰의 sub. 저장(3단계)할 때 어느 줄인지
 };

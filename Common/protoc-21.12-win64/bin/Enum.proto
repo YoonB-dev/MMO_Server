@@ -16,3 +16,13 @@ enum MoveState
 	MOVE_STATE_MOVING = 1;
 	MOVE_STATE_AIRBORNE = 2;	// 점프/낙하 중 (미사용)
 }
+
+// S_ENTER_GAME 실패 이유
+enum EnterGameError
+{
+	ENTER_GAME_ERROR_NONE = 0;
+	ENTER_GAME_ERROR_INVALID_TOKEN = 1;		// 형식 / 서명 / 발급자 / 대상이 틀림 (변조, 다른 키로 서명, alg none, 토큰 없음)
+	ENTER_GAME_ERROR_TOKEN_EXPIRED = 2;		// exp 지남 -> 클라는 아웃게임 서버 /auth/refresh 후 다시 시도
+	ENTER_GAME_ERROR_ALREADY_ENTERED = 3;	// 이미 입장했거나 입장 처리 중
+	ENTER_GAME_ERROR_SERVER_ERROR = 4;		// DB 실패 등
+}

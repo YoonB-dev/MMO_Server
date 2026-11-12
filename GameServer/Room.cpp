@@ -154,6 +154,12 @@ void Room::LogStats(uint64 now)
 
 void Room::Enter(PlayerRef player)
 {
+	// DB 큐가 SetPlayer한 뒤 바로 끊기면, Leave가 이 Enter보다 먼저 줄에 들어갈 수 있음
+	//   그 경우 세션은 이미 연결 끊김 표시라 여기서 막음 (안 막으면 아무도 내보내지 않는 유령 플레이어가 남음)
+	GameSessionRef session = player->GetSession();
+	if (session == nullptr || session->IsConnected() == false)
+		return;
+
 	const uint64 myId = player->GetObjectId();
 	_players[myId] = player;
 
