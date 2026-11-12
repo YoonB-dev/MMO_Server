@@ -68,6 +68,12 @@ public:
 
 	int64	GetAccountId() const { return _accountId; }
 
+	// 지금 상태를 DB 한 줄 모양으로 복사 (Room 줄 안에서만 호출 -> 저장은 DB 줄이 이 복사본으로)
+	CharacterData ToCharacterData()
+	{
+		return CharacterData{ _accountId, GetPosInfo()->x(), GetPosInfo()->z(), GetStatInfo()->hp(), mp };
+	}
+
 	// 연결이 이미 끊겼으면 nullptr
 	GameSessionRef	GetSession() { return _session.lock(); }
 
@@ -130,5 +136,5 @@ public:
 
 private:
 	weak_ptr<GameSession>	_session;	// 세션이 Player를 shared_ptr로 들고 있으므로 이쪽은 weak (순환 참조 방지)
-	int64					_accountId = 0;	// 토큰의 sub. 저장(3단계)할 때 어느 줄인지
+	int64					_accountId = 0;	// 토큰의 sub = player_character의 account_id (저장할 때 어느 줄인지)
 };

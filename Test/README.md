@@ -53,6 +53,7 @@ powershell -ExecutionPolicy Bypass -File .\Test\Run-Test.ps1 -All
 | `MonsterDodge` | 나를 노린 예고를 보자마자 반대로 달리면 판정 순간 부채꼴 밖 -> 서버 `attack miss`, 데미지 없음 |
 | `PlayerDeath` | (몬스터 데미지를 100으로 덮어씀) 맞아 죽으면 S_DIE revive=5000, 몬스터는 포기(dead), 죽은 동안 이동/공격은 dead로 거절, 5초 뒤 (0, 0)에서 부활(S_REVIVE hp=100, MP 50) |
 | `EnterGameAuth` | 입장 토큰 검증: 로그인한 토큰 2명 입장(서버 `[DB] loaded character`) + 직접 만든 토큰 대조군 통과. 위조(sub만 바꿈)/다른 키/alg none/빈 토큰은 `error=1`, 만료는 `error=2`. 실패한 토큰은 DB까지 안 가고, 연결은 유지 |
+| `CharacterSave` | (서버 `--save-interval-sec 2`) A가 이동 후 멈춤 -> 주기 저장(`[DB] saved 1 character(s)`). B가 같은 계정으로 입장하면 A가 끊기고(`[Login] duplicate login`) A의 저장이 끝난 뒤 B가 A의 위치에서 시작. B 종료 후 C가 재접속해도 같은 위치 |
 | `AuthFlow` | 아웃게임 서버: 가입(201 / 중복 409 / 형식 400) -> 로그인 실패 401(틀린 비밀번호와 없는 아이디가 같은 응답) -> 로그인(JWT claims iss/aud/sub, 15분) -> refresh 회전 -> 옛 refresh 재사용 시 401 + 계정 토큰 전부 폐기 -> logout 뒤 refresh 401 |
 
 ## 시나리오 추가
@@ -73,11 +74,12 @@ Assert-ServerAlive
 | 함수 | 설명 |
 |---|---|
 | `Set-GameData -Sql "<문장>"` | 이 시나리오에서만 기획 데이터 수치를 덮어씀. `Start-GameServer` 전에 호출. 시나리오가 끝나면(실패해도) Run-Test가 원래 값으로 복구 |
-| `Start-GameServer [-TimeoutSec 10]` | (아웃게임 서버가 아직 없으면 먼저 띄우고) 서버 실행, 로그에 `listening`이 뜰 때까지 대기. 실패하면 시나리오 중단 |
-| `Start-DummyClients -Name -Count [-Arguments]` | 이름 붙인 DummyClient 그룹 실행 (프로세스 하나에 Count명). 계정 이름 `<Name><시나리오 시각>_<번호>`로 가입/로그인 후 입장 |
+| `Start-GameServer [-TimeoutSec 10] [-Arguments]` | (아웃게임 서버가 아직 없으면 먼저 띄우고) 서버 실행 (`-Arguments`: 예 `'--save-interval-sec 2'`), 로그에 `listening`이 뜰 때까지 대기. 실패하면 시나리오 중단 |
+| `Start-DummyClients -Name -Count [-Arguments]` | 이름 붙인 DummyClient 그룹 실행 (프로세스 하나에 Count명). 계정 이름 `<Name><시나리오 시각>_<번호>`로 가입/로그인 후 입장. `-AccountOf <그룹>`이면 그 그룹과 같은 계정 (중복 로그인 / 재접속 테스트) |
 | `Stop-DummyClients -Name` | 그룹 강제 종료 (연결이 한꺼번에 끊김) |
 | `Wait-Seconds n` | 대기 |
 | `Wait-LogCount -Name -Pattern -Expected [-TimeoutSec 10]` | 패턴이 Expected 줄 이상 나올 때까지 대기 (시간 초과는 실패) |
+| `Get-LogNumber -Name -Pattern` | 패턴의 첫 괄호 그룹을 숫자로 꺼냄 (마지막 줄 기준, 없으면 `$null`). 예: `'MOVE_TEST ok x=([-\d.]+)'` |
 | `Assert-LogCount -Name -Pattern -Expected` | 줄 수가 정확히 같은지 |
 | `Assert-LogContains` / `Assert-LogNotContains -Name -Pattern` | 한 번 이상 나왔는지 / 안 나왔는지 |
 | `Assert-ServerAlive` | 서버 프로세스가 살아 있는지 |

@@ -148,6 +148,18 @@ const MoveSendPolicy* ParseMonsterSendPolicy(int argc, char* argv[])
 	return policy;
 }
 
+// GameServer.exe [--save-interval-sec N]  (주기 저장 간격, 기본 60초. 테스트에서 기다리지 않으려고 짧게 줌)
+uint64 ParseSaveIntervalSec(int argc, char* argv[])
+{
+	uint64 seconds = 60;
+	for (int32 i = 1; i + 1 < argc; i++)
+	{
+		if (string(argv[i]) == "--save-interval-sec")
+			seconds = static_cast<uint64>(::atoi(argv[i + 1]));
+	}
+	return seconds;
+}
+
 // 시작 순서 (메인 스레드)
 //   설정(config.ini) -> 토큰 검증기([Auth]) -> DB 접속 + 확인 쿼리 -> 기획 데이터 로드(LoadGameData)
 //   -> DB 큐 생성 -> Room 생성, 몬스터 스폰, 첫 틱 예약 -> 서버 열기(listen) -> 워커 스레드
@@ -175,9 +187,10 @@ int main(int argc, char* argv[])
 		return -1;
 
 	ClientPacketHandler::Init();
-	GDBQueue = MakeShared<DBQueue>();	// 입장할 때 캐릭터 불러오기 (게임 중 DB 일은 전부 이 줄로)
+	GDBQueue = MakeShared<DBQueue>();	// 캐릭터 불러오기 / 저장 (게임 중 DB 일은 전부 이 줄로)
 	GRoom = MakeShared<Room>();
 	GRoom->SetMonsterSendPolicy(monsterSendPolicy);
+	GRoom->SetSaveInterval(ParseSaveIntervalSec(argc, argv));
 	GRoom->Start();
 
 	ServerServiceRef service = StartServerService();

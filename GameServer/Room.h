@@ -52,9 +52,10 @@ class Room : public JobQueue
 
 public:
 	void	SetMonsterSendPolicy(const MoveSendPolicy* policy);	// Start 전에 main에서 한 번
+	void	SetSaveInterval(uint64 seconds);	// 주기 저장 간격 (Start 전에 main에서 한 번, 기본 60초)
 	void	Start();				// 첫 틱 예약 (main에서 한 번)
 	void	Enter(PlayerRef player);
-	void	Leave(uint64 objectId);
+	void	Leave(PlayerRef player);	// 방에서 빼기 + 저장 요청 (저장할 값을 꺼내야 해서 id가 아니라 Player)
 	void	HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 buttons, uint32 seq);
 	void	HandleSkill(PlayerRef player, int32 skillId, uint64 targetId);
 
@@ -76,6 +77,7 @@ private:
 	void	LogStats(uint64 now);
 	void	ResetInputCounts();
 	void	UpdatePlayerStats();					// 1초마다 스탯 갱신 (자연 회복)
+	void	SaveAllPlayers();						// 주기 저장: 전원 값을 복사해서 DB 줄로
 	void	SendMp(const PlayerRef& player);		// S_CHANGE_MP를 본인에게
 	void	UpdatePlayers(Protocol::S_MOVE& pkt);
 	void	UpdateMonsters(Protocol::S_MOVE& pkt);
@@ -94,6 +96,7 @@ private:
 	uint64	_tick = 0;				// 서버 틱 번호 (S_MOVE의 server_tick)
 	uint64	_nextTickTime = 0;		// 다음 틱 목표 시각 (GetTickCount64 기준, ms)
 	uint64	_logStartTime = 0;		// 틱 간격 측정 시작 시각
+	uint64	_saveIntervalTicks = 60 * TICKS_PER_SECOND;	// 주기 저장 간격 (틱). 서버가 죽어도 잃는 건 이만큼
 
 	const MoveSendPolicy*	_monsterSendPolicy = nullptr;	// 몬스터 S_MOVE 전송 규칙. static 정책 객체를 빌려 씀 (소유 안 함)
 

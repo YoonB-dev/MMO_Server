@@ -6,6 +6,7 @@
 #include "ClientPacketHandler.h"
 #include "MoveSendPolicy.h"
 #include "GameData.h"
+#include "DBQueue.h"
 #include <cmath>
 #include <algorithm>
 #include <chrono>
@@ -18,6 +19,11 @@
 //   1초마다   ResetInputCounts, UpdatePlayerStats (자연 회복)
 //   매 틱     UpdatePlayers (입력 적용 -> 이동) -> UpdateMonsters (AI) -> 바뀐 이동을 S_MOVE 하나로 전송
 //   10초마다  LogStats (틱 간격, 처리 시간, 몬스터 전송 수, 스킬 거절/빗나감 수)
+//   60초마다  SaveAllPlayers (전원 값을 복사해서 DB 줄로. 틱은 DB를 기다리지 않음)
+//
+// 입장 / 퇴장
+//   DB 줄(LoadCharacter)이 캐릭터를 불러온 뒤 Enter -> S_ENTER_GAME, S_SPAWN
+//   끊기면 Leave -> S_DESPAWN + 값을 복사해서 DB 줄(LeaveCharacter)에 저장 요청
 //
 // 전투 (C_SKILL -> HandleSkill)
 //   검사 6개 (타겟 문제는 대상 필수 스킬이면 거절, 아니면 빗나감) -> 확정(쿨타임, MP) -> S_SKILL
@@ -84,6 +90,9 @@ void Room::Tick()
 		ResetInputCounts();
 		UpdatePlayerStats();
 	}
+
+	if (_tick % _saveIntervalTicks == 0)
+		SaveAllPlayers();
 
 	// 이번 틱에 바뀐 이동을 한 패킷에 모아서 전체(본인 포함)에 전송
 	//   플레이어 먼저 -> 몬스터는 이번 틱에 움직인 플레이어 위치를 보고 판단
@@ -197,14 +206,40 @@ void Room::Enter(PlayerRef player)
 	}
 }
 
-void Room::Leave(uint64 objectId)
+void Room::Leave(PlayerRef player)
 {
-	if (_players.erase(objectId) == 0)
-		return;	// 이미 나간 플레이어
+	const uint64 id = player->GetObjectId();
+	if (_players.erase(id) > 0)
+	{
+		Protocol::S_DESPAWN pkt;
+		pkt.add_object_ids(id);
+		Broadcast(ClientPacketHandler::MakeSendBuffer(pkt), id);
+	}
 
-	Protocol::S_DESPAWN pkt;
-	pkt.add_object_ids(objectId);
-	Broadcast(ClientPacketHandler::MakeSendBuffer(pkt), objectId);
+	// 방에 없었어도(Enter보다 Leave가 먼저 온 경우) 저장 + 접속 목록 정리는 반드시
+	//   안 보내면 DB 줄의 접속 목록에 계속 남아서 그 계정이 다시 못 들어옴
+	//   값은 지금 복사해서 넘김 (DB 줄은 이 복사본만 봄 -> Player를 같이 만지지 않음)
+	GDBQueue->DoAsync(&DBQueue::LeaveCharacter, player->ToCharacterData());
+}
+
+void Room::SetSaveInterval(uint64 seconds)
+{
+	_saveIntervalTicks = (seconds > 0 ? seconds : 1) * TICKS_PER_SECOND;	// 0이면 % 0이 돼서 최소 1초
+}
+
+// 주기 저장: 전원의 지금 값을 복사해서 한 번에 넘김 (Room 줄은 DB를 기다리지 않음)
+//   Room은 한 줄이라 "주기 저장 복사 -> Leave 복사" 순서로 DB 줄에 들어감 -> 옛 값이 나중 값을 덮어쓰지 않음
+void Room::SaveAllPlayers()
+{
+	if (_players.empty())
+		return;
+
+	xvector<CharacterData> rows;
+	rows.reserve(_players.size());
+	for (auto& [id, player] : _players)
+		rows.push_back(player->ToCharacterData());
+
+	GDBQueue->DoAsync(&DBQueue::SaveCharacters, rows);
 }
 
 void Room::HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 buttons, uint32 seq)
