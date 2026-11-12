@@ -12,6 +12,7 @@ bool GAttackTest = false;
 bool GRangedTest = false;
 bool GDodgeTest = false;
 bool GDeathTest = false;
+std::vector<string> GAccessTokens;
 
 int64 NowUs()
 {
@@ -42,8 +43,10 @@ void ServerSession::OnConnected()
 {
 	Log(_clientId, "Connected to server");
 
-	// 접속하자마자 게임 입장 요청
+	// 접속하자마자 게임 입장 요청 (main에서 로그인해 둔 내 번호의 토큰을 같이 보냄)
 	Protocol::C_ENTER_GAME enterPkt;
+	if (_clientId - 1 < static_cast<int32>(GAccessTokens.size()))
+		enterPkt.set_access_token(GAccessTokens[_clientId - 1]);
 	Send(ServerPacketHandler::MakeSendBuffer(enterPkt));
 }
 

@@ -3,9 +3,10 @@
 #include "ThreadManager.h"
 #include "ServerSession.h"
 #include "ServerPacketHandler.h"
+#include "AuthClient.h"
 
-// 접속 확인용 더미 클라이언트: N명이 접속해서 게임에 입장하고, 1초마다 C_PING -> S_PING 왕복 시간 출력
-//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--no-ping] [--input-test] [--move-test] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test] [--ranged-test] [--dodge-test] [--death-test]
+// 접속 확인용 더미 클라이언트: N명이 아웃게임 서버에 로그인 -> 게임 서버에 접속해서 토큰으로 입장하고, 1초마다 C_PING -> S_PING 왕복 시간 출력
+//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--account-prefix dummy] [--auth-host localhost] [--auth-port 7100] [--token T] [--no-ping] [--input-test] [--move-test] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test] [--ranged-test] [--dodge-test] [--death-test]
 //   인자 없이 실행하면 3명, 127.0.0.1:7777, ping 사용 (Test/Run-Test.ps1에서 옵션을 넘겨서 사용)
 static const int32 IOCP_THREAD_COUNT = 2;
 
@@ -14,6 +15,11 @@ struct ClientOptions
 	wstring	ip = L"127.0.0.1";
 	uint16	port = 7777;
 	int32	count = 3;
+	string	accountPrefix = "dummy";	// 계정 이름 = prefix_1, prefix_2 ... (없으면 가입부터)
+	wstring	authHost = L"localhost";	// 아웃게임 서버 (개발 인증서가 localhost용이라 IP가 아니라 이름)
+	uint16	authPort = 7100;
+	bool	useToken = false;			// --token을 줬으면 로그인 없이 모든 클라가 token을 그대로 보냄 (토큰 공격 테스트용, 빈 값도 가능)
+	string	token;
 	bool	ping = true;
 	bool	inputTest = false;	// 입장 후 검증용 이동 입력 묶음 전송
 	bool	moveTest = false;	// 입장 후 오른쪽 이동 -> 멈춤 -> 위치 판정
@@ -45,6 +51,20 @@ ClientOptions ParseOptions(int argc, char* argv[])
 		{
 			const string ip = argv[++i];
 			options.ip.assign(ip.begin(), ip.end());	// IP는 ASCII라 한 글자씩 wchar로 옮겨도 됨
+		}
+		else if (arg == "--account-prefix" && hasValue)
+			options.accountPrefix = argv[++i];
+		else if (arg == "--auth-host" && hasValue)
+		{
+			const string host = argv[++i];
+			options.authHost.assign(host.begin(), host.end());	// 호스트 이름도 ASCII
+		}
+		else if (arg == "--auth-port" && hasValue)
+			options.authPort = static_cast<uint16>(::atoi(argv[++i]));
+		else if (arg == "--token" && hasValue)
+		{
+			options.useToken = true;
+			options.token = argv[++i];
 		}
 		else if (arg == "--no-ping")
 			options.ping = false;
@@ -94,6 +114,27 @@ int main(int argc, char* argv[])
 	GDeathTest = options.deathTest;
 
 	this_thread::sleep_for(1s); // 같이 실행할 때 서버가 먼저 열리도록 잠깐 대기
+
+	// 입장 토큰 준비 (접속 전에 전부 끝냄 -> OnConnected에서는 읽기만 하므로 락 없음)
+	if (options.useToken)
+	{
+		GAccessTokens.assign(options.count, options.token);
+		Log("[Client] Using the given token for all " + to_string(options.count) + " client(s)");
+	}
+	else
+	{
+		GAccessTokens = LoginAll(options.authHost, options.authPort, options.accountPrefix, options.count);
+		for (const string& token : GAccessTokens)
+		{
+			if (token.empty())
+			{
+				Log("[Client] Login failed (is OutGameServer running on port " + to_string(options.authPort) + "?)");
+				return -1;
+			}
+		}
+		Log("[Client] Logged in " + to_string(options.count) + " account(s) as " + options.accountPrefix + "_N");
+	}
+
 	ServerPacketHandler::Init();
 
 	ClientServiceRef service = MakeShared<ClientService>(

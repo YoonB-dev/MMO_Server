@@ -127,7 +127,12 @@ bool Handle_S_ENTER_GAME(PacketSessionRef& session, Protocol::S_ENTER_GAME& pkt)
 	ostringstream line;
 	line << "S_ENTER_GAME success=" << pkt.success() << " myId=" << pkt.player().object_id()
 		<< " mp=" << pkt.mp() << "/" << pkt.max_mp();
+	if (pkt.success() == false)
+		line << " error=" << pkt.error();	// Enum.proto EnterGameError (1 토큰 오류, 2 만료, 3 중복 요청, 4 서버 오류)
 	Log(ClientIdOf(session), line.str());
+
+	if (pkt.success() == false)
+		return true;	// 입장 실패: 연결은 유지, 테스트 동작은 시작하지 않음
 
 	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
 	me->myId = pkt.player().object_id();

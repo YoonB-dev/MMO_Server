@@ -51,6 +51,7 @@ extern bool GAttackTest;	// --attack-test: chase-test 후 앞에 멈춘 몬스�
 extern bool GRangedTest;	// --ranged-test: 몬스터에게서 10m 떨어진 곳에 멈춰 원거리 스킬 (어그로, MP 확인용)
 extern bool GDodgeTest;	// --dodge-test: chase-test 후 나를 노린 몬스터 예고 공격을 보고 반대로 달려서 피함
 extern bool GDeathTest;	// --death-test: chase-test 후 몬스터에게 맞아 죽으면, 죽은 상태에서 이동/공격을 보냄 (거절 확인)
+extern std::vector<string> GAccessTokens;	// 클라 번호 순서의 입장 토큰 ([0] = Client 1). 실패한 칸은 빈 문자열
 
 int64 NowUs();
 
