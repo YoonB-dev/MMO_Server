@@ -25,8 +25,9 @@ powershell -ExecutionPolicy Bypass -File .\Test\Run-Test.ps1 -All
 
 - 서버는 `GameServer/config.ini`의 IP/Port로 뜬다. 같은 포트로 이미 서버가 떠 있으면 시작 단계에서 실패한다.
 - 서버는 시작할 때 `config.ini`의 [Database]로 MySQL에 접속한다 (`GameServer.cpp`의 `USE_DATABASE`, 기본 true). MySQL 서비스가 켜져 있어야 한다.
-- `Run-Test.ps1`은 시나리오 전에 `Database/Setup-Database.ps1`을 불러서 DB가 없으면 만들고, 기획 데이터(`Database/Data/*.sql`)를 다시 적용한다. 실패하면 시나리오를 돌리지 않는다.
-- 실행 파일은 `Binary/<구성>/`에서 가져온다. 코드를 바꿨으면 `-Build`를 붙이거나 VS에서 먼저 빌드한다.
+- `Run-Test.ps1`은 시나리오 전에 `Database/Setup-Database.ps1`을 불러서 DB가 없으면 만들고, 기획 데이터(`Database/Data/*.sql`)를 다시 적용하고, 안 적용한 Migrations를 적용한다. 실패하면 시나리오를 돌리지 않는다.
+- 실행 파일은 `Binary/<구성>/`에서 가져온다. 코드를 바꿨으면 `-Build`를 붙이거나 VS에서 먼저 빌드한다. `-Build`는 아웃게임 서버(`dotnet build OutGameServer`)도 같이 빌드한다.
+- 아웃게임 서버 시나리오(`AuthFlow`)는 처음 한 번 `OutGameServer/Setup-Secrets.ps1` 실행과 HTTPS 개발 인증서 신뢰(`dotnet dev-certs https --trust`)가 필요하다.
 
 ## 시나리오
 
@@ -50,6 +51,7 @@ powershell -ExecutionPolicy Bypass -File .\Test\Run-Test.ps1 -All
 | `MonsterHit` | 몬스터 앞에 가만히 서 있으면, 몬스터가 예고(S_SKILL skill=101 cast=600 range=2 angle=45) 후 공격 -> 서버 `attack hit`, 내 HP 100 -> 84, 이후 자연 회복 85 |
 | `MonsterDodge` | 나를 노린 예고를 보자마자 반대로 달리면 판정 순간 부채꼴 밖 -> 서버 `attack miss`, 데미지 없음 |
 | `PlayerDeath` | (몬스터 데미지를 100으로 덮어씀) 맞아 죽으면 S_DIE revive=5000, 몬스터는 포기(dead), 죽은 동안 이동/공격은 dead로 거절, 5초 뒤 (0, 0)에서 부활(S_REVIVE hp=100, MP 50) |
+| `AuthFlow` | 아웃게임 서버: 가입(201 / 중복 409 / 형식 400) -> 로그인 실패 401(틀린 비밀번호와 없는 아이디가 같은 응답) -> 로그인(JWT claims iss/aud/sub, 15분) -> refresh 회전 -> 옛 refresh 재사용 시 401 + 계정 토큰 전부 폐기 -> logout 뒤 refresh 401 |
 
 ## 시나리오 추가
 
@@ -77,6 +79,10 @@ Assert-ServerAlive
 | `Assert-LogCount -Name -Pattern -Expected` | 줄 수가 정확히 같은지 |
 | `Assert-LogContains` / `Assert-LogNotContains -Name -Pattern` | 한 번 이상 나왔는지 / 안 나왔는지 |
 | `Assert-ServerAlive` | 서버 프로세스가 살아 있는지 |
+| `Start-OutGameServer [-TimeoutSec 20]` | 아웃게임 서버 실행, `Now listening on`이 뜰 때까지 대기. 로그 이름 `outgame` |
+| `Invoke-AuthApi <경로> @{...}` | 아웃게임 서버에 JSON POST. 4xx/5xx도 예외 없이 `@{ Status; Body }`로 돌려줌 |
+| `Assert-That <조건> <메시지>` | 로그가 아니라 값(응답 코드 등)으로 확인 |
+| `Assert-ProcessAlive -Name` | 이름 붙인 프로세스(`outgame` 등)가 살아 있는지 |
 
 - `-Name`은 로그 파일 이름이기도 하다. 서버 로그는 `server`.
 - `-Pattern`은 정규식이고, 패턴이 들어 있는 **줄 수**를 센다.
