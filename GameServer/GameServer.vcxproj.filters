@@ -51,6 +51,12 @@
     <ClCompile Include="MoveSendPolicy.cpp">
       <Filter>Packet</Filter>
     </ClCompile>
+    <ClCompile Include="JwtVerifier.cpp">
+      <Filter>Session</Filter>
+    </ClCompile>
+    <ClCompile Include="DBQueue.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
     <ClCompile Include="Enum.pb.cc">
       <Filter>Packet\Generated</Filter>
     </ClCompile>
@@ -91,6 +97,12 @@
     </ClInclude>
     <ClInclude Include="MoveSendPolicy.h">
       <Filter>Packet</Filter>
+    </ClInclude>
+    <ClInclude Include="JwtVerifier.h">
+      <Filter>Session</Filter>
+    </ClInclude>
+    <ClInclude Include="DBQueue.h">
+      <Filter>Game</Filter>
     </ClInclude>
     <ClInclude Include="Enum.pb.h">
       <Filter>Packet\Generated</Filter>

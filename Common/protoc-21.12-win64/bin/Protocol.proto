@@ -1,6 +1,7 @@
 syntax = "proto3";
 package Protocol;
 
+import "Enum.proto";
 import "Struct.proto";
 
 // 패킷 이름 규칙: C_ = 클라이언트 -> 서버, S_ = 서버 -> 클라이언트
@@ -21,16 +22,21 @@ message S_PING
 }
 
 // ==================== 입장 / 퇴장 ====================
+// 클라 -> 서버: 입장 요청. 아웃게임 서버(/auth/login)에서 받은 Access Token(JWT)을 같이 보냄
+//   서버는 서명/만료/발급자/대상을 검증하고, 그 계정의 캐릭터를 DB에서 불러와 입장시킴
 message C_ENTER_GAME
 {
+	string access_token = 1;
 }
 
+// 서버 -> 클라: 입장 결과. 실패해도 연결은 유지 (토큰을 갱신해서 다시 보낼 수 있게)
 message S_ENTER_GAME
 {
 	bool success = 1;
 	ObjectInfo player = 2;	// 내 캐릭터
 	int32 mp = 3;			// 내 MP. 본인만 보는 정보라 ObjectInfo(다른 사람 S_SPAWN에도 가는 정보)가 아니라 여기에
 	int32 max_mp = 4;
+	EnterGameError error = 5;	// success = false일 때 이유
 }
 
 message S_SPAWN

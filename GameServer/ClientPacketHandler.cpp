@@ -3,6 +3,8 @@
 #include "GameSession.h"
 #include "Player.h"
 #include "Room.h"
+#include "JwtVerifier.h"
+#include "DBQueue.h"
 
 // ClientPacketHandler.h는 빌드할 때마다 Protocol.proto에서 생성된다 (Common/protoc-21.12-win64/bin/GenPackets.bat)
 //   -> C_로 시작하는 패킷을 proto에 추가하면 여기에 Handle_C_XXX를 만들어야 링크된다
@@ -24,16 +26,32 @@ bool Handle_C_PING(PacketSessionRef& session, Protocol::C_PING& pkt)
 	return true;
 }
 
+// 입장: 토큰 검증(여기, 계산만) -> 캐릭터 불러오기(DB 큐) -> 입장(Room 줄)
+//   실패해도 연결은 끊지 않음 (클라가 토큰을 갱신해서 다시 보낼 수 있게)
 bool Handle_C_ENTER_GAME(PacketSessionRef& session, Protocol::C_ENTER_GAME& pkt)
 {
 	GameSessionRef gameSession = static_pointer_cast<GameSession>(session);
-	if (gameSession->GetPlayer() != nullptr)
-		return false;	// 이미 입장한 세션
 
-	PlayerRef player = MakeShared<Player>(gameSession);
-	gameSession->SetPlayer(player);
+	// 이미 입장했거나 처리 중이면 거절 (같은 세션에서 두 번 보내기)
+	if (gameSession->TryBeginEnter() == false)
+	{
+		Protocol::S_ENTER_GAME fail;
+		fail.set_success(false);
+		fail.set_error(Protocol::ENTER_GAME_ERROR_ALREADY_ENTERED);
+		session->Send(ClientPacketHandler::MakeSendBuffer(fail));
+		return true;
+	}
 
-	GRoom->DoAsync(&Room::Enter, player);	// 실제 입장은 Room의 줄에서
+	// 아웃게임 서버가 발급한 Access Token(JWT) 검증. HMAC 계산 한 번이라 이 IOCP 스레드에서 바로 함 (DB 안 씀)
+	const JwtVerifier::Result auth = GJwtVerifier.Verify(pkt.access_token());
+	if (auth.error != Protocol::ENTER_GAME_ERROR_NONE)
+	{
+		gameSession->FailEnter(auth.error);
+		return true;
+	}
+
+	// 캐릭터 불러오기는 DB 큐에서 (IOCP 스레드도 Room 줄도 DB를 기다리지 않게)
+	GDBQueue->DoAsync(&DBQueue::LoadCharacter, gameSession, auth.accountId);
 	return true;
 }
 

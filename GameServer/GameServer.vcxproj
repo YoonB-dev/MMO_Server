@@ -96,6 +96,8 @@
     <ClCompile Include="Room.cpp" />
     <ClCompile Include="ClientPacketHandler.cpp" />
     <ClCompile Include="MoveSendPolicy.cpp" />
+    <ClCompile Include="JwtVerifier.cpp" />
+    <ClCompile Include="DBQueue.cpp" />
     <ClCompile Include="Enum.pb.cc">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -117,6 +119,8 @@
     <ClInclude Include="Room.h" />
     <ClInclude Include="ClientPacketHandler.h" />
     <ClInclude Include="MoveSendPolicy.h" />
+    <ClInclude Include="JwtVerifier.h" />
+    <ClInclude Include="DBQueue.h" />
     <ClInclude Include="Enum.pb.h" />
     <ClInclude Include="Struct.pb.h" />
     <ClInclude Include="Protocol.pb.h" />

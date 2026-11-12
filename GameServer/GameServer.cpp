@@ -8,6 +8,8 @@
 #include "Room.h"
 #include "MoveSendPolicy.h"
 #include "GameData.h"
+#include "JwtVerifier.h"
+#include "DBQueue.h"
 
 std::atomic<int64> g_inboundPacketCount(0);
 std::atomic<int64> g_outboundPacketCount(0);
@@ -77,6 +79,23 @@ bool ConnectDatabase()
 	return VerifyDatabase();
 }
 
+// 입장 토큰(JWT) 검증기 준비: config.ini [Auth]의 키가 아웃게임 서버와 같아야 함 (Setup-Secrets.ps1이 넣음)
+bool InitAuth()
+{
+	const string secret = GConfigManager->GetString("Auth", "JwtSecret");
+	const string issuer = GConfigManager->GetString("Auth", "Issuer");
+	const string audience = GConfigManager->GetString("Auth", "Audience");
+
+	if (GJwtVerifier.Init(secret, issuer, audience) == false)
+	{
+		cout << "[Auth] config.ini [Auth] JwtSecret / Issuer / Audience is missing or invalid (run OutGameServer/Setup-Secrets.ps1)" << endl;
+		return false;
+	}
+
+	cout << "[Auth] JWT verifier ready (issuer " << issuer << ", audience " << audience << ")" << endl;
+	return true;
+}
+
 ServerServiceRef StartServerService()
 {
 	ServerServiceRef service = MakeShared<ServerService>(
@@ -130,8 +149,8 @@ const MoveSendPolicy* ParseMonsterSendPolicy(int argc, char* argv[])
 }
 
 // 시작 순서 (메인 스레드)
-//   설정(config.ini) -> DB 접속 + 확인 쿼리 -> 기획 데이터 로드(LoadGameData)
-//   -> Room 생성, 몬스터 스폰, 첫 틱 예약 -> 서버 열기(listen) -> 워커 스레드
+//   설정(config.ini) -> 토큰 검증기([Auth]) -> DB 접속 + 확인 쿼리 -> 기획 데이터 로드(LoadGameData)
+//   -> DB 큐 생성 -> Room 생성, 몬스터 스폰, 첫 틱 예약 -> 서버 열기(listen) -> 워커 스레드
 //   DB와 기획 데이터를 워커보다 먼저 준비하므로, 이후 여러 스레드가 락 없이 읽기만 함
 int main(int argc, char* argv[])
 {
@@ -144,6 +163,9 @@ int main(int argc, char* argv[])
 	if (LoadServerConfig() == false)
 		return -1;
 
+	if (InitAuth() == false)
+		return -1;
+
 	if (USE_DATABASE && ConnectDatabase() == false)
 		return -1;
 
@@ -153,6 +175,7 @@ int main(int argc, char* argv[])
 		return -1;
 
 	ClientPacketHandler::Init();
+	GDBQueue = MakeShared<DBQueue>();	// 입장할 때 캐릭터 불러오기 (게임 중 DB 일은 전부 이 줄로)
 	GRoom = MakeShared<Room>();
 	GRoom->SetMonsterSendPolicy(monsterSendPolicy);
 	GRoom->Start();
