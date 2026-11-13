@@ -2,7 +2,7 @@
 #include "JobQueue.h"
 
 // 매개변수로만 쓰는 타입은 선언만 (무거운 헤더를 include하지 않으려고, 정의는 Room.cpp에서 include)
-namespace Protocol { class S_MOVE; }
+namespace Protocol { class S_MOVE; class S_SPAWN; }
 class MoveSendPolicy;
 struct MonsterSpawnData;
 struct SkillData;
@@ -26,6 +26,7 @@ class Room : public JobQueue
 	static constexpr float	TICK_DT = TICK_INTERVAL_MS / 1000.f;		// 한 틱 = 0.05초 (실제 간격과 관계없이 고정 -> 재현 가능)
 	static constexpr float	WORLD_HALF_SIZE = 100.f;					// 월드 200x200, 가운데가 (0, 0)
 	static constexpr float	RAD_TO_DEG = 57.2957795f;					// 라디안 -> 도 (180 / π)
+	static constexpr size_t	MAX_PACKET_BODY_BYTES = 4000;	// 나눠 보내는 패킷 한 개의 최대 크기 (SendBuffer 청크 6000 안에 여유 있게)
 	static constexpr float	SKILL_RANGE_SLACK = 1.f;	// 사거리 여유 (m). 클라가 보는 위치는 지연만큼 다름 (몬스터 4m/s x 왕복 200ms = 0.8m)
 
 	// 타겟 검사 결과 (HandleSkill의 4~6번)
@@ -87,6 +88,8 @@ private:
 	TargetCheck	CheckTarget(const PlayerRef& player, const SkillData& skill, uint64 targetId, MonsterRef& outTarget);
 	static void	CountTargetFail(TargetFailStats& stats, TargetCheck result);
 	void	Broadcast(SendBufferRef sendBuffer, uint64 exceptId = 0);
+	void	BroadcastMoves(const Protocol::S_MOVE& all);						// 큰 S_MOVE를 나눠서 모두에게
+	void	SendSpawns(const PlayerRef& player, const Protocol::S_SPAWN& all);	// 큰 S_SPAWN을 나눠서 한 명에게
 	void	SendTo(PlayerRef player, SendBufferRef sendBuffer);
 
 private:

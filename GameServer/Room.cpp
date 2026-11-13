@@ -17,7 +17,7 @@
 //
 // 틱 (50ms마다 DoTimer로 다음 틱 예약)
 //   1초마다   ResetInputCounts, UpdatePlayerStats (자연 회복)
-//   매 틱     UpdatePlayers (입력 적용 -> 이동) -> UpdateMonsters (AI) -> 바뀐 이동을 S_MOVE 하나로 전송
+//   매 틱     UpdatePlayers (입력 적용 -> 이동) -> UpdateMonsters (AI) -> 바뀐 이동을 S_MOVE로 전송 (크면 BroadcastMoves가 나눔)
 //   10초마다  LogStats (틱 간격, 처리 시간, 몬스터 전송 수, 스킬 거절/빗나감 수)
 //   60초마다  SaveAllPlayers (전원 값을 복사해서 DB 줄로. 틱은 DB를 기다리지 않음)
 //
@@ -102,7 +102,7 @@ void Room::Tick()
 	UpdateMonsters(pkt);
 
 	if (pkt.moves_size() > 0)
-		Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
+		BroadcastMoves(pkt);
 
 	const uint64 workUs = chrono::duration_cast<chrono::microseconds>(chrono::steady_clock::now() - workStart).count();
 	_workTimeSumUs += workUs;
@@ -195,7 +195,7 @@ void Room::Enter(PlayerRef player)
 			*pkt.add_objects() = monster->GetObjectInfo();
 
 		if (pkt.objects_size() > 0)
-			SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
+			SendSpawns(player, pkt);
 	}
 
 	// 3. 다른 사람들에게: 내가 들어왔다
@@ -678,6 +678,56 @@ void Room::Broadcast(SendBufferRef sendBuffer, uint64 exceptId)
 		if (id != exceptId)
 			SendTo(player, sendBuffer);
 	}
+}
+
+// 큰 패킷 나누기: 항목이 많은 S_MOVE(틱마다)와 S_SPAWN(입장할 때)은 MAX_PACKET_BODY_BYTES씩 끊어서 여러 개로 보냄
+//   ServerCore의 SendBuffer 청크가 6000바이트라 그보다 큰 패킷을 만들면 ASSERT_CRASH로 서버가 죽음
+//   (이동 항목 약 45바이트 -> 한 틱에 약 130개, 객체 항목 약 55바이트 -> 방에 약 110개가 한계였음)
+//   ByteSizeLong: protobuf가 계산한 직렬화 크기. 반복 항목은 앞에 태그 1바이트 + 길이 1~2바이트가 더 붙어서 +3
+//   나뉜 S_MOVE는 server_tick이 같음 -> 클라는 항목만 적용하면 되고, 같은 틱 번호라고 버리면 안 됨
+void Room::BroadcastMoves(const Protocol::S_MOVE& all)
+{
+	Protocol::S_MOVE part;
+	part.set_server_tick(all.server_tick());
+	size_t partBytes = 0;
+
+	for (const Protocol::MoveEntry& entry : all.moves())
+	{
+		const size_t entryBytes = entry.ByteSizeLong() + 3;
+		if (partBytes + entryBytes > MAX_PACKET_BODY_BYTES)
+		{
+			Broadcast(ClientPacketHandler::MakeSendBuffer(part));
+			part.clear_moves();
+			partBytes = 0;
+		}
+		*part.add_moves() = entry;
+		partBytes += entryBytes;
+	}
+
+	if (part.moves_size() > 0)
+		Broadcast(ClientPacketHandler::MakeSendBuffer(part));
+}
+
+void Room::SendSpawns(const PlayerRef& player, const Protocol::S_SPAWN& all)
+{
+	Protocol::S_SPAWN part;
+	size_t partBytes = 0;
+
+	for (const Protocol::ObjectInfo& object : all.objects())
+	{
+		const size_t objectBytes = object.ByteSizeLong() + 3;
+		if (partBytes + objectBytes > MAX_PACKET_BODY_BYTES)
+		{
+			SendTo(player, ClientPacketHandler::MakeSendBuffer(part));
+			part.clear_objects();
+			partBytes = 0;
+		}
+		*part.add_objects() = object;
+		partBytes += objectBytes;
+	}
+
+	if (part.objects_size() > 0)
+		SendTo(player, ClientPacketHandler::MakeSendBuffer(part));
 }
 
 void Room::SendTo(PlayerRef player, SendBufferRef sendBuffer)
