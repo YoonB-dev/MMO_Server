@@ -1,0 +1,7 @@
+date,label,commit,dirty,config,players,players_entered,players_in_room,monsters_in_room,area_m,warmup_s,measure_s,room_samples,tick_interval_avg_ms,tick_interval_max_ms,work_avg_ms,work_max_ms,packets_per_s,kb_per_s,cpu_cores_avg,cpu_cores_max,cpu_pct_avg,mem_mb_avg,mem_mb_max,server_alive,run_dir
+2026-11-13 21:58,baseline,9f045d1,False,Release,50,50,50,303,100,60,60,6,49.99,50.08,6.13,17.49,1932,2922,0.2,0.34,0.99,698.71,698.8,True,20261113_215832_baseline_p50_m300
+2026-11-13 22:00,baseline,9f045d1,False,Release,100,100,100,303,100,60,60,6,50,50,8.49,23.8,4583,7245,0.18,0.34,0.89,732.8,732.8,True,20261113_220037_baseline_p100_m300
+2026-11-13 22:02,baseline,9f045d1,False,Release,200,200,200,303,100,60,60,6,49.99,50.08,14.39,43.9,10650,19274,0.27,0.43,1.37,801,801,True,20261113_220243_baseline_p200_m300
+2026-11-13 22:04,baseline,9f045d1,False,Release,400,400,400,303,100,60,60,6,49.99,50.08,32.85,128.78,28147,56623,0.73,0.93,3.63,937.45,937.5,True,20261113_220448_baseline_p400_m300
+2026-11-13 22:07,baseline,9f045d1,False,Release,100,100,100,103,100,60,60,6,50,50.08,6.05,15.37,2785,3830,0.16,0.34,0.79,731,731,True,20261113_220658_baseline_p100_m100
+2026-11-13 22:09,baseline,9f045d1,False,Release,100,100,100,1003,100,60,60,6,50,50.16,14.31,44.47,10048,18925,0.32,0.45,1.6,739.4,739.4,True,20261113_220903_baseline_p100_m1000
