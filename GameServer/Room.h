@@ -27,6 +27,10 @@ class Room : public JobQueue
 	static constexpr float	WORLD_HALF_SIZE = 100.f;					// 월드 200x200, 가운데가 (0, 0)
 	static constexpr float	RAD_TO_DEG = 57.2957795f;					// 라디안 -> 도 (180 / π)
 	static constexpr size_t	MAX_PACKET_BODY_BYTES = 4000;	// 나눠 보내는 패킷 한 개의 최대 크기 (SendBuffer 청크 6000 안에 여유 있게)
+	static constexpr int32	LOAD_MONSTER_TYPE = 1;			// 부하 테스트 몬스터 종류 (data_monster의 슬라임)
+	static constexpr int32	LOAD_SPAWN_ID_BASE = 100000;	// 부하 테스트 스폰 줄 번호 (기획 데이터 spawn_id와 안 겹치게)
+	static constexpr int32	LOAD_RESPAWN_MS = 10000;
+	static constexpr uint32	LOAD_MONSTER_SEED = 12345;		// 고정 -> 매번 같은 배치
 	static constexpr float	SKILL_RANGE_SLACK = 1.f;	// 사거리 여유 (m). 클라가 보는 위치는 지연만큼 다름 (몬스터 4m/s x 왕복 200ms = 0.8m)
 
 	// 타겟 검사 결과 (HandleSkill의 4~6번)
@@ -54,6 +58,7 @@ class Room : public JobQueue
 public:
 	void	SetMonsterSendPolicy(const MoveSendPolicy* policy);	// Start 전에 main에서 한 번
 	void	SetSaveInterval(uint64 seconds);	// 주기 저장 간격 (Start 전에 main에서 한 번, 기본 60초)
+	void	SetLoadMonsters(int32 count, float area);	// 부하 테스트용 몬스터 추가 (Start 전에 main에서 한 번, 기본 0마리)
 	void	Start();				// 첫 틱 예약 (main에서 한 번)
 	void	Enter(PlayerRef player);
 	void	Leave(PlayerRef player);	// 방에서 빼기 + 저장 요청 (저장할 값을 꺼내야 해서 id가 아니라 Player)
@@ -69,6 +74,7 @@ public:
 
 private:
 	void	SpawnMonsters();
+	void	SpawnLoadMonsters();								// 부하 테스트용 (SetLoadMonsters로 정한 수만큼)
 	void	SpawnMonster(MonsterSpawnData spawn);				// 한 마리 생성 + S_SPAWN. 시작할 때와 리스폰 때 같이 씀
 	void	KillMonster(MonsterRef monster, uint64 killerId);	// 방에서 빼기 + S_DIE + 리스폰 예약
 	void	KillPlayer(const PlayerRef& player, uint64 killerId);	// 방에 남김(시체) + 정지 + S_DIE + 부활 예약
@@ -103,10 +109,16 @@ private:
 
 	const MoveSendPolicy*	_monsterSendPolicy = nullptr;	// 몬스터 S_MOVE 전송 규칙. static 정책 객체를 빌려 씀 (소유 안 함)
 
+	// 부하 테스트용 몬스터 (--load-monsters, --load-area). 기획 데이터(data_monster_spawn)와 별도로 SpawnMonsters에서 추가
+	int32	_loadMonsterCount = 0;
+	float	_loadMonsterArea = 0.f;
+
 	// 10초(200틱) 통계 -> LogStats에서 출력 후 0으로
 	uint64	_workTimeSumUs = 0;		// 틱 처리 시간 합 (마이크로초)
 	uint64	_workTimeMaxUs = 0;		// 가장 오래 걸린 틱
 	uint64	_monsterMovesSent = 0;	// S_MOVE에 넣은 몬스터 항목 수
+	uint64	_sentPackets = 0;		// 보낸 패킷 수 (SendTo 호출 수 = 받는 사람 수만큼)
+	uint64	_sentBytes = 0;			// 보낸 바이트 수 (패킷 헤더 포함)
 	SkillRejectStats	_skillRejects;	// 스킬 요청 거절 이유별 횟수
 	TargetFailStats		_skillMisses;	// 빗나감 이유별 횟수 (S_SKILL target 0으로 나간 것)
 };

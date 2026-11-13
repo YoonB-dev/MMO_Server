@@ -2,6 +2,7 @@
 #include "ServerPacketHandler.h"
 #include "ServerSession.h"
 #include <sstream>
+#include <random>
 
 // ServerPacketHandler.h는 빌드할 때마다 Protocol.proto에서 생성된다
 //   -> S_로 시작하는 패킷을 proto에 추가하면 여기에 Handle_S_XXX를 만들어야 링크된다
@@ -105,6 +106,38 @@ static void SendMoveInput(PacketSessionRef& session, float dirX, float dirZ, uin
 	session->Send(ServerPacketHandler::MakeSendBuffer(pkt));
 }
 
+// 부하 테스트 봇 (--bot, Test/Load/Run-Load.ps1)
+//   ±GBotArea 안의 무작위 지점을 골라 그쪽으로 걷고, 도착하면(2m 안) 다음 지점을 고름
+//   입력은 목표를 바꿀 때만 보냄 (진짜 유저처럼 방향이 바뀔 때만) -> 부하의 대부분은 서버가 보내는 S_MOVE 쪽
+//   죽었거나 벽에 막혀 10초 안에 못 가면 새로 고름 (죽은 동안 보낸 입력은 서버가 거절함)
+static constexpr float	BOT_ARRIVE_DIST = 2.f;
+static constexpr int64	BOT_REPICK_US = 10'000'000;
+
+static void PickBotTarget(PacketSessionRef& session)
+{
+	// thread_local: 스레드마다 따로 하나씩 생기는 변수
+	//   mt19937(난수 생성기)은 여러 스레드가 같이 쓰면 안전하지 않음 -> 락 대신 IOCP 스레드마다 하나씩 둠
+	//   (ServerCore의 LCurrentJobQueue도 같은 방식). 처음 쓰는 순간 그 스레드에서 한 번만 초기화됨
+	thread_local mt19937 rng{ random_device{}() };
+	uniform_real_distribution<float> pos(-GBotArea, GBotArea);
+
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+	me->botTargetX = pos(rng);
+	me->botTargetZ = pos(rng);
+	me->botPickUs = NowUs();
+	SendMoveInput(session, me->botTargetX - me->myX, me->botTargetZ - me->myZ, ++me->chaseSeq);	// 길이는 서버가 1로 줄임
+}
+
+static void UpdateBot(PacketSessionRef& session)
+{
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+	const float dx = me->botTargetX - me->myX;
+	const float dz = me->botTargetZ - me->myZ;
+	const bool arrived = (dx * dx + dz * dz <= BOT_ARRIVE_DIST * BOT_ARRIVE_DIST);
+	if (arrived || NowUs() - me->botPickUs >= BOT_REPICK_US)
+		PickBotTarget(session);
+}
+
 // 서버 입력 검증 확인용 (Test/Scenarios/MoveInputValidation.ps1)
 static void SendInputTestBurst(PacketSessionRef& session)
 {
@@ -148,6 +181,8 @@ bool Handle_S_ENTER_GAME(PacketSessionRef& session, Protocol::S_ENTER_GAME& pkt)
 		SendInputTestBurst(session);
 	if (GMoveTest)
 		SendMoveInput(session, 100.f, 0.f, 1);	// 오른쪽. 길이 100 -> 서버가 1로 줄여야 정상 속도
+	if (GBot)
+		PickBotTarget(session);
 	return true;
 }
 
@@ -320,7 +355,8 @@ bool Handle_S_SPAWN(PacketSessionRef& session, Protocol::S_SPAWN& pkt)
 			me->monsterIds.insert(object.object_id());
 		}
 	}
-	Log(me->GetClientId(), line.str());
+	if (GBot == false)
+		Log(me->GetClientId(), line.str());
 
 	if (GChaseTest && me->chaseTargetId == 0)
 		StartChaseTest(session, pkt);
@@ -363,18 +399,22 @@ bool Handle_S_MOVE(PacketSessionRef& session, Protocol::S_MOVE& pkt)
 {
 	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
 
-	// 플레이어/몬스터 항목 수를 나눠서 출력 (몬스터는 S_SPAWN에서 기록해 둔 id로 구분)
-	int32 monsterCount = 0;
-	for (const Protocol::MoveEntry& entry : pkt.moves())
+	// --bot: 패킷마다 찍는 로그를 끔. 봇 수백 명 x 초당 20번이면 Log의 락 + flush가 서버보다 먼저 막힘
+	if (GBot == false)
 	{
-		if (me->monsterIds.count(entry.object_id()) > 0)
-			monsterCount++;
-	}
+		// 플레이어/몬스터 항목 수를 나눠서 출력 (몬스터는 S_SPAWN에서 기록해 둔 id로 구분)
+		int32 monsterCount = 0;
+		for (const Protocol::MoveEntry& entry : pkt.moves())
+		{
+			if (me->monsterIds.count(entry.object_id()) > 0)
+				monsterCount++;
+		}
 
-	ostringstream line;
-	line << "S_MOVE tick=" << pkt.server_tick()
-		<< " players=" << (pkt.moves_size() - monsterCount) << " monsters=" << monsterCount;
-	Log(me->GetClientId(), line.str());
+		ostringstream line;
+		line << "S_MOVE tick=" << pkt.server_tick()
+			<< " players=" << (pkt.moves_size() - monsterCount) << " monsters=" << monsterCount;
+		Log(me->GetClientId(), line.str());
+	}
 
 	// 몬스터 항목(--monster-log)과 내 캐릭터 항목만 따로 출력
 	for (const Protocol::MoveEntry& entry : pkt.moves())
@@ -404,6 +444,9 @@ bool Handle_S_MOVE(PacketSessionRef& session, Protocol::S_MOVE& pkt)
 		me->myX = move.pos_info().x();
 		me->myZ = move.pos_info().z();
 
+		if (GBot)
+			continue;	// 내 위치만 갱신. 목표 확인은 아래 UpdateBot (내 항목이 안 와도 10초 재선택은 돌아야 해서 루프 밖)
+
 		ostringstream myLine;
 		myLine << "MY_MOVE tick=" << pkt.server_tick()
 			<< " x=" << move.pos_info().x() << " z=" << move.pos_info().z() << " yaw=" << move.pos_info().yaw()
@@ -415,6 +458,9 @@ bool Handle_S_MOVE(PacketSessionRef& session, Protocol::S_MOVE& pkt)
 		if (GRangedTest)
 			UpdateRangedTest(session, entry);
 	}
+
+	if (GBot && me->myId != 0)
+		UpdateBot(session);
 	return true;
 }
 
@@ -424,7 +470,8 @@ bool Handle_S_DESPAWN(PacketSessionRef& session, Protocol::S_DESPAWN& pkt)
 	line << "S_DESPAWN ids:";
 	for (uint64 objectId : pkt.object_ids())
 		line << " " << objectId;
-	Log(ClientIdOf(session), line.str());
+	if (GBot == false)
+		Log(ClientIdOf(session), line.str());
 	return true;
 }
 
@@ -435,7 +482,8 @@ bool Handle_S_SKILL(PacketSessionRef& session, Protocol::S_SKILL& pkt)
 	ostringstream line;
 	line << "S_SKILL caster=" << pkt.object_id() << " skill=" << pkt.skill_id() << " target=" << pkt.target_id()
 		<< " yaw=" << pkt.yaw() << " cast=" << pkt.cast_ms() << " range=" << pkt.range() << " angle=" << pkt.hit_angle();
-	Log(me->GetClientId(), line.str());
+	if (GBot == false)
+		Log(me->GetClientId(), line.str());
 
 	// 내 스킬이 확정됨 -> 클라 쪽 쿨타임 시작 (진짜 클라도 S_SKILL을 받은 시점부터 잼)
 	if (pkt.object_id() == me->myId)
@@ -460,7 +508,8 @@ bool Handle_S_CHANGE_HP(PacketSessionRef& session, Protocol::S_CHANGE_HP& pkt)
 	ostringstream line;
 	line << "S_CHANGE_HP id=" << pkt.object_id() << " hp=" << pkt.hp()
 		<< " damage=" << pkt.damage() << " attacker=" << pkt.attacker_id();
-	Log(ClientIdOf(session), line.str());
+	if (GBot == false)
+		Log(ClientIdOf(session), line.str());
 	return true;
 }
 
@@ -470,7 +519,8 @@ bool Handle_S_DIE(PacketSessionRef& session, Protocol::S_DIE& pkt)
 
 	ostringstream line;
 	line << "S_DIE id=" << pkt.object_id() << " killer=" << pkt.killer_id() << " revive=" << pkt.revive_ms();
-	Log(me->GetClientId(), line.str());
+	if (GBot == false)
+		Log(me->GetClientId(), line.str());
 
 	// 몬스터: 서버에서 이미 사라진 id (진짜 클라는 죽는 모션 뒤에 액터를 지움)
 	//   chaseTargetId는 0으로 되돌리지 않음: 0이면 리스폰 몬스터의 S_SPAWN을 받을 때 추적 테스트가 처음부터 다시 시작됨
@@ -494,7 +544,17 @@ bool Handle_S_REVIVE(PacketSessionRef& session, Protocol::S_REVIVE& pkt)
 
 	ostringstream line;
 	line << "S_REVIVE id=" << object.object_id() << " x=" << pos.x() << " z=" << pos.z() << " hp=" << object.stat_info().hp();
-	Log(ClientIdOf(session), line.str());
+	if (GBot == false)
+		Log(ClientIdOf(session), line.str());
+
+	// --bot: 내가 부활함 (시작 위치로 돌아옴) -> 거기서 새 목표를 골라 다시 걷기 시작
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+	if (GBot && object.object_id() == me->myId)
+	{
+		me->myX = pos.x();
+		me->myZ = pos.z();
+		PickBotTarget(session);
+	}
 	return true;
 }
 

@@ -6,7 +6,8 @@
 #include "AuthClient.h"
 
 // 접속 확인용 더미 클라이언트: N명이 아웃게임 서버에 로그인 -> 게임 서버에 접속해서 토큰으로 입장하고, 1초마다 C_PING -> S_PING 왕복 시간 출력
-//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--account-prefix dummy] [--auth-host localhost] [--auth-port 7100] [--token T] [--no-ping] [--input-test] [--move-test] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test] [--ranged-test] [--dodge-test] [--death-test]
+//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--account-prefix dummy] [--auth-host localhost] [--auth-port 7100] [--token T] [--no-ping] [--input-test] [--move-test] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test] [--ranged-test] [--dodge-test] [--death-test] [--bot] [--area M]
+//   부하 테스트(Test/Load/Run-Load.ps1)는 --bot --area 100 --no-ping
 //   인자 없이 실행하면 3명, 127.0.0.1:7777, ping 사용 (Test/Run-Test.ps1에서 옵션을 넘겨서 사용)
 static const int32 IOCP_THREAD_COUNT = 2;
 
@@ -31,6 +32,8 @@ struct ClientOptions
 	bool	rangedTest = false;	// 몬스터에게서 10m 떨어진 곳에 멈춰 원거리 스킬 (타겟 고르기/조준은 chaseTest 것을 씀)
 	bool	dodgeTest = false;	// chaseTest 후 나를 노린 몬스터 예고 공격을 보고 반대로 달려서 피함
 	bool	deathTest = false;	// chaseTest 후 맞아 죽으면, 죽은 상태에서 이동/공격을 보냄
+	bool	bot = false;		// 부하 테스트: 무작위 지점을 계속 돌아다님 + 패킷마다 찍는 로그 끔
+	float	area = 100.f;		// 봇이 돌아다니는 범위 ±area (m)
 };
 
 ClientOptions ParseOptions(int argc, char* argv[])
@@ -88,6 +91,10 @@ ClientOptions ParseOptions(int argc, char* argv[])
 			options.dodgeTest = true;
 		else if (arg == "--death-test")
 			options.deathTest = true;
+		else if (arg == "--bot")
+			options.bot = true;
+		else if (arg == "--area" && hasValue)
+			options.area = static_cast<float>(::atof(argv[++i]));
 		else
 			Log("[Client] Unknown option: " + arg);
 	}
@@ -112,6 +119,8 @@ int main(int argc, char* argv[])
 	GRangedTest = options.rangedTest;
 	GDodgeTest = options.dodgeTest;
 	GDeathTest = options.deathTest;
+	GBot = options.bot;
+	GBotArea = options.area;
 
 	this_thread::sleep_for(1s); // 같이 실행할 때 서버가 먼저 열리도록 잠깐 대기
 

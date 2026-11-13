@@ -10,6 +10,7 @@
 #include <cmath>
 #include <algorithm>
 #include <chrono>
+#include <random>
 
 // Room: 게임 월드 하나 (전역 GRoom). JobQueue라서 이 객체의 함수는 한 번에 한 스레드만 실행함
 //   -> _players, _monsters와 플레이어/몬스터 상태는 Room 안에서만 만지고 락이 없음
@@ -56,6 +57,39 @@ void Room::SpawnMonsters()
 {
 	for (const MonsterSpawnData& spawn : GetMonsterSpawns())
 		SpawnMonster(spawn);
+
+	SpawnLoadMonsters();
+}
+
+// 부하 테스트용 몬스터 (--load-monsters N --load-area M): ±M m 안의 무작위 위치에 N마리
+//   시드 고정 -> 실행할 때마다 배치가 똑같음 (AOI 적용 전/후를 같은 조건으로 비교하려고)
+//   스폰 줄은 기획 데이터와 안 겹치게 번호를 크게 잡고, 리스폰도 일반 몬스터처럼 이 줄로 함 (Monster가 복사해 둠)
+void Room::SpawnLoadMonsters()
+{
+	if (_loadMonsterCount == 0)
+		return;
+
+	if (FindMonsterData(LOAD_MONSTER_TYPE) == nullptr)
+	{
+		LogLine() << "[Room] load monsters skipped: monster type " << LOAD_MONSTER_TYPE << " not in data_monster";
+		return;
+	}
+
+	mt19937 rng(LOAD_MONSTER_SEED);
+	uniform_real_distribution<float> pos(-_loadMonsterArea, _loadMonsterArea);
+
+	for (int32 i = 0; i < _loadMonsterCount; i++)
+	{
+		MonsterSpawnData spawn;
+		spawn.spawnId = LOAD_SPAWN_ID_BASE + i;
+		spawn.monsterId = LOAD_MONSTER_TYPE;
+		spawn.x = pos(rng);
+		spawn.z = pos(rng);
+		spawn.respawnMs = LOAD_RESPAWN_MS;
+		SpawnMonster(spawn);
+	}
+
+	LogLine() << "[Room] load monsters: " << _loadMonsterCount << " in +-" << _loadMonsterArea << "m (seed " << LOAD_MONSTER_SEED << ")";
 }
 
 // 스폰 줄 하나로 몬스터 한 마리 생성 + 이미 있는 사람들에게 S_SPAWN. 시작할 때와 리스폰(KillMonster의 DoTimer) 때 같이 씀
@@ -125,6 +159,7 @@ void Room::Tick()
 
 // 200틱(10초) 동안의 통계 출력 후 다음 구간을 위해 0으로
 //   avg interval: 틱 사이 간격 (50ms면 정상), work: 틱 안에서 게임 처리에 쓴 시간, monster moves: 보낸 몬스터 이동 수
+//   players / monsters: 지금 방 인원, sent: 10초 동안 보낸 패킷 수와 바이트 (부하 테스트 Test/Load/Run-Load.ps1이 이 줄을 읽음)
 void Room::LogStats(uint64 now)
 {
 	const double avgMs = static_cast<double>(now - _logStartTime) / TICK_LOG_INTERVAL;
@@ -133,7 +168,9 @@ void Room::LogStats(uint64 now)
 
 	LogLine() << "[Room] tick " << _tick << ", avg interval " << avgMs << "ms"
 		<< ", work avg " << workAvgMs << "ms max " << workMaxMs << "ms"
-		<< ", monster moves " << _monsterMovesSent << " (" << _monsterSendPolicy->Name() << ")";
+		<< ", monster moves " << _monsterMovesSent << " (" << _monsterSendPolicy->Name() << ")"
+		<< ", players " << _players.size() << ", monsters " << _monsters.size()
+		<< ", sent " << _sentPackets << " packets " << (_sentBytes / 1024) << " KB";
 
 	// 스킬 거절 / 빗나감: 이 구간에 하나라도 있었을 때만 출력
 	//   거절은 정상 플레이에서 거의 0 (핵 의심용), 빗나감은 허공 공격이라 정상 플레이에서도 생김
@@ -157,6 +194,8 @@ void Room::LogStats(uint64 now)
 	_workTimeSumUs = 0;
 	_workTimeMaxUs = 0;
 	_monsterMovesSent = 0;
+	_sentPackets = 0;
+	_sentBytes = 0;
 	_skillRejects = {};
 	_skillMisses = {};
 }
@@ -225,6 +264,12 @@ void Room::Leave(PlayerRef player)
 void Room::SetSaveInterval(uint64 seconds)
 {
 	_saveIntervalTicks = (seconds > 0 ? seconds : 1) * TICKS_PER_SECOND;	// 0이면 % 0이 돼서 최소 1초
+}
+
+void Room::SetLoadMonsters(int32 count, float area)
+{
+	_loadMonsterCount = (std::max)(count, 0);
+	_loadMonsterArea = (std::min)((std::max)(area, 0.f), WORLD_HALF_SIZE);	// 월드 밖에 놓으면 움직이자마자 벽에 걸림
 }
 
 // 주기 저장: 전원의 지금 값을 복사해서 한 번에 넘김 (Room 줄은 DB를 기다리지 않음)
@@ -730,8 +775,14 @@ void Room::SendSpawns(const PlayerRef& player, const Protocol::S_SPAWN& all)
 		SendTo(player, ClientPacketHandler::MakeSendBuffer(part));
 }
 
+// 방에서 나가는 패킷은 전부 여기를 지남 -> 송신량 통계도 여기서 셈
+//   Room 잡큐 안에서만 불리므로(한 번에 한 스레드) 카운터는 atomic이 아니어도 됨
 void Room::SendTo(PlayerRef player, SendBufferRef sendBuffer)
 {
 	if (GameSessionRef session = player->GetSession())
+	{
+		_sentPackets++;
+		_sentBytes += sendBuffer->WriteSize();
 		session->Send(sendBuffer);
+	}
 }

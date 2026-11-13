@@ -160,6 +160,21 @@ uint64 ParseSaveIntervalSec(int argc, char* argv[])
 	return seconds;
 }
 
+// GameServer.exe [--load-monsters N] [--load-area M]  (부하 테스트용 몬스터 N마리를 ±M m에 추가. 기본 0마리, 100m)
+void ApplyLoadMonsterOptions(int argc, char* argv[])
+{
+	int32 count = 0;
+	float area = 100.f;
+	for (int32 i = 1; i + 1 < argc; i++)
+	{
+		if (string(argv[i]) == "--load-monsters")
+			count = ::atoi(argv[i + 1]);
+		else if (string(argv[i]) == "--load-area")
+			area = static_cast<float>(::atof(argv[i + 1]));
+	}
+	GRoom->SetLoadMonsters(count, area);
+}
+
 // 시작 순서 (메인 스레드)
 //   설정(config.ini) -> 토큰 검증기([Auth]) -> DB 접속 + 확인 쿼리 -> 기획 데이터 로드(LoadGameData)
 //   -> DB 큐 생성 -> Room 생성, 몬스터 스폰, 첫 틱 예약 -> 서버 열기(listen) -> 워커 스레드
@@ -191,6 +206,7 @@ int main(int argc, char* argv[])
 	GRoom = MakeShared<Room>();
 	GRoom->SetMonsterSendPolicy(monsterSendPolicy);
 	GRoom->SetSaveInterval(ParseSaveIntervalSec(argc, argv));
+	ApplyLoadMonsterOptions(argc, argv);
 	GRoom->Start();
 
 	ServerServiceRef service = StartServerService();

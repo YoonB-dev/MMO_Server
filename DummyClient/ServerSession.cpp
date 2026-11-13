@@ -12,6 +12,8 @@ bool GAttackTest = false;
 bool GRangedTest = false;
 bool GDodgeTest = false;
 bool GDeathTest = false;
+bool GBot = false;
+float GBotArea = 100.f;
 std::vector<string> GAccessTokens;
 
 int64 NowUs()

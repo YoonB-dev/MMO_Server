@@ -35,6 +35,9 @@ public:
 	int32	autoAttackCount = 0;	// --attack-test: 보낸 자동 공격 수 (0: 먼 몬스터, 1: 허공, 이후: 타겟)
 	bool	rangedShotSent = false;	// --ranged-test: 원거리 스킬을 보냈는지
 	bool	dodgeSent = false;		// --dodge-test: 몬스터 예고를 보고 피하는 입력을 보냈는지
+	float	botTargetX = 0.f;		// --bot: 지금 걸어가는 목표 지점
+	float	botTargetZ = 0.f;
+	int64	botPickUs = 0;			// --bot: 목표를 고른 시각 (오래 못 가면 새로 고름)
 
 private:
 	int32 _clientId = 0;	// 이 프로세스 안에서 1, 2, 3 ... (로그 구분용)
@@ -51,6 +54,8 @@ extern bool GAttackTest;	// --attack-test: chase-test 후 앞에 멈춘 몬스�
 extern bool GRangedTest;	// --ranged-test: 몬스터에게서 10m 떨어진 곳에 멈춰 원거리 스킬 (어그로, MP 확인용)
 extern bool GDodgeTest;	// --dodge-test: chase-test 후 나를 노린 몬스터 예고 공격을 보고 반대로 달려서 피함
 extern bool GDeathTest;	// --death-test: chase-test 후 몬스터에게 맞아 죽으면, 죽은 상태에서 이동/공격을 보냄 (거절 확인)
+extern bool GBot;		// --bot: 부하 테스트용. ±GBotArea 안의 무작위 지점을 계속 돌아다니고, 받은 패킷마다 찍는 로그는 끔
+extern float GBotArea;	// --area: 봇이 돌아다니는 범위 (m, 기본 100 = 서버 월드 200x200 전체)
 extern std::vector<string> GAccessTokens;	// 클라 번호 순서의 입장 토큰 ([0] = Client 1). 실패한 칸은 빈 문자열
 
 int64 NowUs();
