@@ -42,6 +42,9 @@
     <ClCompile Include="Room.cpp">
       <Filter>Game</Filter>
     </ClCompile>
+    <ClCompile Include="Grid.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
     <ClCompile Include="GameSessionManager.cpp">
       <Filter>Session</Filter>
     </ClCompile>
@@ -87,6 +90,9 @@
       <Filter>Game</Filter>
     </ClInclude>
     <ClInclude Include="Room.h">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="Grid.h">
       <Filter>Game</Filter>
     </ClInclude>
     <ClInclude Include="GameSessionManager.h">

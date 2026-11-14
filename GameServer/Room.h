@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "JobQueue.h"
+#include "Grid.h"
 
 // 매개변수로만 쓰는 타입은 선언만 (무거운 헤더를 include하지 않으려고, 정의는 Room.cpp에서 include)
 namespace Protocol { class S_MOVE; class S_SPAWN; }
@@ -31,6 +32,11 @@ class Room : public JobQueue
 	static constexpr int32	LOAD_SPAWN_ID_BASE = 100000;	// 부하 테스트 스폰 줄 번호 (기획 데이터 spawn_id와 안 겹치게)
 	static constexpr int32	LOAD_RESPAWN_MS = 10000;
 	static constexpr uint32	LOAD_MONSTER_SEED = 12345;		// 고정 -> 매번 같은 배치
+	// 시야 (AOI): 이 거리 안에 들어오면 S_SPAWN, 나가는 거리 밖으로 가면 S_DESPAWN. 사이에서는 그대로 (경계에서 깜빡임 방지)
+	//   들어오는 반경은 상호작용 거리보다 커야 함 (원거리 스킬 10m + 여유 1m, 몬스터 추적 포기 12m)
+	static constexpr float	VIEW_ENTER_RADIUS = 30.f;
+	static constexpr float	VIEW_LEAVE_RADIUS = 35.f;	// 5m = 1초 동안 걷는 거리. Grid 칸 크기로도 씀 (3x3칸이면 이 반경을 다 덮음)
+	static constexpr float	VIEW_EVENT_SLACK = 1.f;	// 이벤트 받는 사람 찾을 때 여유 (틱 도중에는 위치가 시야 계산 뒤로 한 틱만큼 움직였을 수 있음)
 	static constexpr float	SKILL_RANGE_SLACK = 1.f;	// 사거리 여유 (m). 클라가 보는 위치는 지연만큼 다름 (몬스터 4m/s x 왕복 200ms = 0.8m)
 
 	// 타겟 검사 결과 (HandleSkill의 4~6번)
@@ -68,7 +74,7 @@ public:
 	// 몬스터 AI가 쓰는 조회/알림 (Room JobQueue 안, 틱 도중에만 호출)
 	PlayerRef	FindPlayer(uint64 objectId);
 	PlayerRef	FindNearestPlayer(float x, float z, float range);
-	void		BroadcastHp(GameObject& target, int32 damage, uint64 attackerId);	// target의 지금 HP를 모두에게 (데미지, 회복 공통)
+	void		BroadcastHp(GameObject& target, int32 damage, uint64 attackerId);	// target의 지금 HP를 target이 보이는 사람에게 (데미지, 회복 공통)
 	void		BroadcastSkill(GameObject& caster, const SkillData& skill, uint64 targetId);	// S_SKILL (플레이어, 몬스터 공통)
 	void		HitPlayer(const PlayerRef& target, uint64 attackerId, int32 damage);			// 데미지 + HP 0이면 KillPlayer
 
@@ -93,8 +99,13 @@ private:
 	void	RejectInput(PlayerRef player, uint32 seq, const char* reason);
 	TargetCheck	CheckTarget(const PlayerRef& player, const SkillData& skill, uint64 targetId, MonsterRef& outTarget);
 	static void	CountTargetFail(TargetFailStats& stats, TargetCheck result);
-	void	Broadcast(SendBufferRef sendBuffer, uint64 exceptId = 0);
-	void	BroadcastMoves(const Protocol::S_MOVE& all);						// 큰 S_MOVE를 나눠서 모두에게
+	void	UpdateViews(const Protocol::S_MOVE& tickMoves);						// 매 틱 끝: 플레이어마다 UpdateView
+	void	UpdateView(const PlayerRef& player, const Protocol::S_MOVE& tickMoves);	// 시야 다시 계산 -> S_DESPAWN, S_SPAWN, S_MOVE를 이 사람에게
+	void	EnterView(const PlayerRef& player);								// 입장 즉시: 주변을 나에게, 나를 주변에게
+	template<typename Func>
+	void	ForEachViewer(GameObject& object, Func&& func);					// object가 보이는 플레이어마다 func (object가 플레이어면 본인 포함)
+	void	BroadcastToViewers(GameObject& object, SendBufferRef sendBuffer);	// object가 보이는 사람에게 (본인 포함)
+	void	SendMoves(const PlayerRef& player, Protocol::S_MOVE& all);				// 큰 S_MOVE를 나눠서 한 명에게
 	void	SendSpawns(const PlayerRef& player, const Protocol::S_SPAWN& all);	// 큰 S_SPAWN을 나눠서 한 명에게
 	void	SendTo(PlayerRef player, SendBufferRef sendBuffer);
 
@@ -106,6 +117,8 @@ private:
 	uint64	_nextTickTime = 0;		// 다음 틱 목표 시각 (GetTickCount64 기준, ms)
 	uint64	_logStartTime = 0;		// 틱 간격 측정 시작 시각
 	uint64	_saveIntervalTicks = 60 * TICKS_PER_SECOND;	// 주기 저장 간격 (틱). 서버가 죽어도 잃는 건 이만큼
+
+	Grid	_grid{ WORLD_HALF_SIZE, VIEW_LEAVE_RADIUS };	// 시야 / 몬스터 감지에서 주변 후보만 찾을 때 씀 (_players, _monsters와 같은 객체를 칸별로)
 
 	const MoveSendPolicy*	_monsterSendPolicy = nullptr;	// 몬스터 S_MOVE 전송 규칙. static 정책 객체를 빌려 씀 (소유 안 함)
 

@@ -18,13 +18,18 @@
 //
 // 틱 (50ms마다 DoTimer로 다음 틱 예약)
 //   1초마다   ResetInputCounts, UpdatePlayerStats (자연 회복)
-//   매 틱     UpdatePlayers (입력 적용 -> 이동) -> UpdateMonsters (AI) -> 바뀐 이동을 S_MOVE로 전송 (크면 BroadcastMoves가 나눔)
+//   매 틱     UpdatePlayers (입력 적용 -> 이동) -> UpdateMonsters (AI) -> UpdateViews (플레이어마다 시야 안의 것만 S_SPAWN / S_DESPAWN / S_MOVE)
 //   10초마다  LogStats (틱 간격, 처리 시간, 몬스터 전송 수, 스킬 거절/빗나감 수)
 //   60초마다  SaveAllPlayers (전원 값을 복사해서 DB 줄로. 틱은 DB를 기다리지 않음)
 //
 // 입장 / 퇴장
-//   DB 줄(LoadCharacter)이 캐릭터를 불러온 뒤 Enter -> S_ENTER_GAME, S_SPAWN
-//   끊기면 Leave -> S_DESPAWN + 값을 복사해서 DB 줄(LeaveCharacter)에 저장 요청
+//   DB 줄(LoadCharacter)이 캐릭터를 불러온 뒤 Enter -> S_ENTER_GAME, 시야 안의 객체를 S_SPAWN (나에게 주변, 주변에게 나)
+//   끊기면 Leave -> 나를 보던 사람에게 S_DESPAWN + 값을 복사해서 DB 줄(LeaveCharacter)에 저장 요청
+//
+// 시야 (AOI)
+//   플레이어마다 "지금 보이는 객체 목록"(Player::visible)을 들고, 매 틱 Grid로 주변 후보만 찾아서 거리로 판정
+//   30m 안에 들어오면 S_SPAWN, 35m 밖으로 나가면 S_DESPAWN, 계속 보이는 것 중 움직인 것만 S_MOVE
+//   이벤트(S_SKILL, S_CHANGE_HP, S_DIE, S_REVIVE)는 그 객체가 보이는 사람에게만 (BroadcastToViewers)
 //
 // 전투 (C_SKILL -> HandleSkill)
 //   검사 6개 (타겟 문제는 대상 필수 스킬이면 거절, 아니면 빗나감) -> 확정(쿨타임, MP) -> S_SKILL
@@ -92,24 +97,18 @@ void Room::SpawnLoadMonsters()
 	LogLine() << "[Room] load monsters: " << _loadMonsterCount << " in +-" << _loadMonsterArea << "m (seed " << LOAD_MONSTER_SEED << ")";
 }
 
-// 스폰 줄 하나로 몬스터 한 마리 생성 + 이미 있는 사람들에게 S_SPAWN. 시작할 때와 리스폰(KillMonster의 DoTimer) 때 같이 씀
+// 스폰 줄 하나로 몬스터 한 마리 생성. 시작할 때와 리스폰(KillMonster의 DoTimer) 때 같이 씀
+//   S_SPAWN은 여기서 보내지 않음: 다음 틱 UpdateView가 주변 사람에게만 보냄 (최대 50ms 뒤)
 //   spawn을 값으로 받음: DoTimer로 넘길 때 넘기는 값과 매개변수 타입이 정확히 같아야 해서
 void Room::SpawnMonster(MonsterSpawnData spawn)
 {
 	const MonsterData* data = FindMonsterData(spawn.monsterId);	// LoadGameData가 검사해 둬서 항상 있음
 	MonsterRef monster = MakeShared<Monster>(*data, spawn);
 	_monsters[monster->GetObjectId()] = monster;
+	_grid.Add(monster);
 
 	LogLine() << "[Room] spawn monster " << monster->GetObjectId() << " (type " << spawn.monsterId << ")"
 		<< " at (" << spawn.x << ", " << spawn.z << ")";
-
-	// 이미 방에 있는 사람들에게 (서버 시작 때는 아무도 없어서 패킷을 만들지 않음)
-	if (_players.empty() == false)
-	{
-		Protocol::S_SPAWN pkt;
-		*pkt.add_objects() = monster->GetObjectInfo();
-		Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
-	}
 }
 
 void Room::Tick()
@@ -128,15 +127,14 @@ void Room::Tick()
 	if (_tick % _saveIntervalTicks == 0)
 		SaveAllPlayers();
 
-	// 이번 틱에 바뀐 이동을 한 패킷에 모아서 전체(본인 포함)에 전송
+	// 이번 틱에 바뀐 이동을 전체 목록(pkt)에 모은 뒤, 플레이어마다 시야 안의 것만 골라서 보냄
 	//   플레이어 먼저 -> 몬스터는 이번 틱에 움직인 플레이어 위치를 보고 판단
+	//   pkt는 그대로 보내지 않음 (UpdateView가 항목을 골라 복사하는 원본)
 	Protocol::S_MOVE pkt;
 	pkt.set_server_tick(_tick);
 	UpdatePlayers(pkt);
 	UpdateMonsters(pkt);
-
-	if (pkt.moves_size() > 0)
-		BroadcastMoves(pkt);
+	UpdateViews(pkt);
 
 	const uint64 workUs = chrono::duration_cast<chrono::microseconds>(chrono::steady_clock::now() - workStart).count();
 	_workTimeSumUs += workUs;
@@ -172,6 +170,16 @@ void Room::LogStats(uint64 now)
 		<< ", players " << _players.size() << ", monsters " << _monsters.size()
 		<< ", sent " << _sentPackets << " packets " << (_sentBytes / 1024) << " KB";
 
+	// 시야: 한 명이 지금 보고 있는 객체 수 (AOI 효과를 숫자로 보려고. 지금 순간의 값)
+	if (_players.empty() == false)
+	{
+		uint64 visibleSum = 0;
+		for (auto& [id, player] : _players)
+			visibleSum += player->visible.size();
+		LogLine() << "[Room] view: avg " << (static_cast<double>(visibleSum) / _players.size()) << " objects per player"
+			<< " (enter " << VIEW_ENTER_RADIUS << "m, leave " << VIEW_LEAVE_RADIUS << "m)";
+	}
+
 	// 스킬 거절 / 빗나감: 이 구간에 하나라도 있었을 때만 출력
 	//   거절은 정상 플레이에서 거의 0 (핵 의심용), 빗나감은 허공 공격이라 정상 플레이에서도 생김
 	const SkillRejectStats& r = _skillRejects;
@@ -200,6 +208,165 @@ void Room::LogStats(uint64 now)
 	_skillMisses = {};
 }
 
+// (x, z)까지의 거리 제곱. 반경도 제곱해서 비교 -> sqrt를 안 씀
+static float DistSq(GameObject& object, float x, float z)
+{
+	const Protocol::PosInfo* pos = object.GetPosInfo();
+	const float dx = pos->x() - x;
+	const float dz = pos->z() - z;
+	return dx * dx + dz * dz;
+}
+
+// object가 보이는 플레이어마다 func(const PlayerRef&) 호출. object가 플레이어면 본인도 포함
+//   "보인다" = 그 플레이어의 visible에 object가 있음 -> S_MOVE를 받는 사람과 이벤트를 받는 사람이 정확히 같음
+//   보이는 사람은 object에서 나가는 반경 안에 있으므로 Grid로 그 주변 칸만 찾아봄
+//   (+ 여유: 틱 도중 몬스터 공격 같은 이벤트는 위치가 마지막 시야 계산 뒤로 한 틱만큼 움직인 상태일 수 있음)
+template<typename Func>
+void Room::ForEachViewer(GameObject& object, Func&& func)
+{
+	const uint64 objectId = object.GetObjectId();
+	const Protocol::PosInfo* pos = object.GetPosInfo();
+	_grid.ForEachPlayer(pos->x(), pos->z(), VIEW_LEAVE_RADIUS + VIEW_EVENT_SLACK, [&](const PlayerRef& player)
+		{
+			if (player->GetObjectId() == objectId || player->visible.count(objectId) > 0)
+				func(player);
+		});
+}
+
+void Room::BroadcastToViewers(GameObject& object, SendBufferRef sendBuffer)
+{
+	ForEachViewer(object, [&](const PlayerRef& player)
+		{
+			SendTo(player, sendBuffer);
+		});
+}
+
+// 입장 즉시 시야 채우기 (다음 틱까지 기다리지 않음)
+//   나에게: 들어오는 반경 안의 플레이어 + 몬스터를 S_SPAWN 한 번에
+//   주변 플레이어에게: 나를 S_SPAWN (같은 거리, 같은 반경이라 "내가 보는 사람" = "나를 보는 사람")
+void Room::EnterView(const PlayerRef& player)
+{
+	const uint64 myId = player->GetObjectId();
+	const float x = player->GetPosInfo()->x();
+	const float z = player->GetPosInfo()->z();
+	const float enterSq = VIEW_ENTER_RADIUS * VIEW_ENTER_RADIUS;
+
+	Protocol::S_SPAWN aroundPkt;	// 나에게 보낼 주변 객체들
+	SendBufferRef mePkt;			// 주변에게 보낼 "나" (처음 필요할 때 한 번만 만들고 같은 버퍼를 여러 명에게)
+
+	_grid.ForEachPlayer(x, z, VIEW_ENTER_RADIUS, [&](const PlayerRef& other)
+		{
+			if (other == player || DistSq(*other, x, z) > enterSq)
+				return;
+
+			player->visible.emplace(other->GetObjectId(), _tick);
+			*aroundPkt.add_objects() = other->GetObjectInfo();
+
+			if (mePkt == nullptr)
+			{
+				Protocol::S_SPAWN pkt;
+				*pkt.add_objects() = player->GetObjectInfo();
+				mePkt = ClientPacketHandler::MakeSendBuffer(pkt);
+			}
+			other->visible.emplace(myId, _tick);
+			SendTo(other, mePkt);
+		});
+
+	_grid.ForEachMonster(x, z, VIEW_ENTER_RADIUS, [&](const MonsterRef& monster)
+		{
+			if (DistSq(*monster, x, z) > enterSq)
+				return;
+
+			player->visible.emplace(monster->GetObjectId(), _tick);
+			*aroundPkt.add_objects() = monster->GetObjectInfo();
+		});
+
+	if (aroundPkt.objects_size() > 0)
+		SendSpawns(player, aroundPkt);
+}
+
+void Room::UpdateViews(const Protocol::S_MOVE& tickMoves)
+{
+	for (auto& [id, player] : _players)
+		UpdateView(player, tickMoves);
+}
+
+// 한 플레이어의 시야를 다시 계산해서 바뀐 것만 보냄
+//   1. Grid에서 나가는 반경(35m)에 걸친 칸의 객체만 후보로
+//   2. 후보마다 거리 판정
+//        이미 보이는 것: 35m 안이면 "이번 틱 확인" 표시 (+ 이번 틱에 움직였으면 S_MOVE에 담음)
+//        안 보이던 것:   30m 안이면 새로 보임 -> S_SPAWN에 담음
+//        (30 ~ 35m에서는 지금 상태 그대로 -> 경계에서 왔다갔다해도 깜빡이지 않음)
+//   3. visible에서 이번 틱 확인 표시가 없는 것 = 안 보이게 됨 -> S_DESPAWN에 담고 지움
+//   보내는 순서: S_DESPAWN -> S_SPAWN -> S_MOVE (새로 보인 것은 S_SPAWN에 지금 위치가 있어서 S_MOVE에 안 넣음)
+void Room::UpdateView(const PlayerRef& player, const Protocol::S_MOVE& tickMoves)
+{
+	const uint64 myId = player->GetObjectId();
+	const float x = player->GetPosInfo()->x();
+	const float z = player->GetPosInfo()->z();
+	const float enterSq = VIEW_ENTER_RADIUS * VIEW_ENTER_RADIUS;
+	const float leaveSq = VIEW_LEAVE_RADIUS * VIEW_LEAVE_RADIUS;
+
+	Protocol::S_SPAWN spawnPkt;
+	Protocol::S_MOVE movePkt;
+	movePkt.set_server_tick(_tick);
+
+	// 내 이동은 항상 (ack_seq로 내 입력이 적용된 걸 확인해야 함)
+	if (player->moveTick == _tick)
+		*movePkt.add_moves() = tickMoves.moves(player->moveIndex);
+
+	// 후보 하나 판정 (플레이어, 몬스터 공통이라 GameObject로 받음)
+	auto check = [&](GameObject& other)
+		{
+			const uint64 otherId = other.GetObjectId();
+			if (otherId == myId)
+				return;
+
+			const float distSq = DistSq(other, x, z);
+			auto it = player->visible.find(otherId);
+			if (it != player->visible.end())
+			{
+				if (distSq > leaveSq)
+					return;		// 표시 안 함 -> 아래 3번에서 S_DESPAWN
+
+				it->second = _tick;
+				if (other.moveTick == _tick)
+					*movePkt.add_moves() = tickMoves.moves(other.moveIndex);
+			}
+			else if (distSq <= enterSq)
+			{
+				player->visible.emplace(otherId, _tick);
+				*spawnPkt.add_objects() = other.GetObjectInfo();
+			}
+		};
+
+	_grid.ForEachPlayer(x, z, VIEW_LEAVE_RADIUS, [&](const PlayerRef& other) { check(*other); });
+	_grid.ForEachMonster(x, z, VIEW_LEAVE_RADIUS, [&](const MonsterRef& monster) { check(*monster); });
+
+	// 3. 이번 틱에 확인 못 한 것 = 멀어졌거나, 다른 칸으로 멀리 갔거나(부활 순간이동)
+	//    erase(it)는 지운 다음 원소를 돌려줌 -> 지우면서 도는 동안 it를 그걸로 바꿔야 함 (지운 반복자는 못 씀)
+	Protocol::S_DESPAWN despawnPkt;
+	for (auto it = player->visible.begin(); it != player->visible.end();)
+	{
+		if (it->second != _tick)
+		{
+			despawnPkt.add_object_ids(it->first);
+			it = player->visible.erase(it);
+		}
+		else
+		{
+			++it;
+		}
+	}
+
+	if (despawnPkt.object_ids_size() > 0)
+		SendTo(player, ClientPacketHandler::MakeSendBuffer(despawnPkt));
+	if (spawnPkt.objects_size() > 0)
+		SendSpawns(player, spawnPkt);
+	if (movePkt.moves_size() > 0)
+		SendMoves(player, movePkt);
+}
+
 void Room::Enter(PlayerRef player)
 {
 	// DB 큐가 SetPlayer한 뒤 바로 끊기면, Leave가 이 Enter보다 먼저 줄에 들어갈 수 있음
@@ -210,6 +377,7 @@ void Room::Enter(PlayerRef player)
 
 	const uint64 myId = player->GetObjectId();
 	_players[myId] = player;
+	_grid.Add(player);
 
 	// 1. 나에게: 내 캐릭터 정보
 	{
@@ -221,28 +389,8 @@ void Room::Enter(PlayerRef player)
 		SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
 	}
 
-	// 2. 나에게: 이미 방에 있던 객체들 (다른 플레이어 + 몬스터)
-	{
-		Protocol::S_SPAWN pkt;
-		for (auto& [id, other] : _players)
-		{
-			if (id != myId)
-				*pkt.add_objects() = other->GetObjectInfo();
-		}
-
-		for (auto& [id, monster] : _monsters)
-			*pkt.add_objects() = monster->GetObjectInfo();
-
-		if (pkt.objects_size() > 0)
-			SendSpawns(player, pkt);
-	}
-
-	// 3. 다른 사람들에게: 내가 들어왔다
-	{
-		Protocol::S_SPAWN pkt;
-		*pkt.add_objects() = player->GetObjectInfo();
-		Broadcast(ClientPacketHandler::MakeSendBuffer(pkt), myId);
-	}
+	// 2. 시야: 주변을 나에게, 나를 주변에게 (방 전체가 아니라 들어오는 반경 안만)
+	EnterView(player);
 }
 
 void Room::Leave(PlayerRef player)
@@ -250,9 +398,19 @@ void Room::Leave(PlayerRef player)
 	const uint64 id = player->GetObjectId();
 	if (_players.erase(id) > 0)
 	{
+		// 나를 보던 사람에게만 S_DESPAWN + 그 사람의 시야 목록에서 나를 지움
 		Protocol::S_DESPAWN pkt;
 		pkt.add_object_ids(id);
-		Broadcast(ClientPacketHandler::MakeSendBuffer(pkt), id);
+		SendBufferRef sendBuffer = ClientPacketHandler::MakeSendBuffer(pkt);
+		ForEachViewer(*player, [&](const PlayerRef& viewer)
+			{
+				if (viewer == player)
+					return;		// 나가는 본인은 제외
+				viewer->visible.erase(id);
+				SendTo(viewer, sendBuffer);
+			});
+
+		_grid.Remove(player);	// ForEachViewer가 끝난 뒤에 (도는 중에 칸 목록을 바꾸면 안 됨)
 	}
 
 	// 방에 없었어도(Enter보다 Leave가 먼저 온 경우) 저장 + 접속 목록 정리는 반드시
@@ -470,26 +628,24 @@ PlayerRef Room::FindPlayer(uint64 objectId)
 }
 
 // (x, z)에서 range 안에 있는 가장 가까운 살아 있는 플레이어. 없으면 nullptr
+//   방 전체가 아니라 Grid에서 range에 걸친 칸의 플레이어만 봄 (몬스터 감지 8m -> 보통 1~4칸)
 PlayerRef Room::FindNearestPlayer(float x, float z, float range)
 {
 	PlayerRef nearest = nullptr;
 	float nearestDistSq = range * range;	// 이보다 가까워야 후보 -> 범위 밖은 자연히 빠짐
 
-	for (auto& [id, player] : _players)
-	{
-		if (player->IsDead())
-			continue;	// 시체는 감지하지 않음
-
-		const Protocol::PosInfo* pos = player->GetPosInfo();
-		const float dx = pos->x() - x;
-		const float dz = pos->z() - z;
-		const float distSq = dx * dx + dz * dz;
-		if (distSq <= nearestDistSq)
+	_grid.ForEachPlayer(x, z, range, [&](const PlayerRef& player)
 		{
-			nearest = player;
-			nearestDistSq = distSq;
-		}
-	}
+			if (player->IsDead())
+				return;		// 시체는 감지하지 않음
+
+			const float distSq = DistSq(*player, x, z);
+			if (distSq <= nearestDistSq)
+			{
+				nearest = player;
+				nearestDistSq = distSq;
+			}
+		});
 	return nearest;
 }
 
@@ -529,11 +685,14 @@ void Room::UpdatePlayers(Protocol::S_MOVE& pkt)
 	{
 		const bool changed = ApplyInput(player);
 		MovePlayer(player);
+		_grid.Update(player);	// 칸이 바뀌었으면 옮김 -> 이어서 도는 몬스터 감지가 새 위치로 찾음
 
 		// 방향이 바뀌었으면 바로, 움직이는 중이면 4틱마다 보냄 (멈춰 있으면 안 보냄)
 		const bool moving = (player->GetMoveInfo()->state() == Protocol::MOVE_STATE_MOVING);
 		if (changed || (moving && resendTick))
 		{
+			player->moveTick = _tick;				// UpdateView가 "이번 틱에 움직였나"를 이걸로 봄
+			player->moveIndex = pkt.moves_size();	// 지금 추가하는 항목의 번호
 			Protocol::MoveEntry* entry = pkt.add_moves();
 			entry->set_object_id(id);
 			*entry->mutable_move_info() = *player->GetMoveInfo();
@@ -549,12 +708,15 @@ void Room::UpdateMonsters(Protocol::S_MOVE& pkt)
 	for (auto& [id, monster] : _monsters)
 	{
 		monster->Update(*this, TICK_DT);
+		_grid.Update(monster);
 
 		// 보낼지는 전송 정책이 결정 (마지막으로 보낸 이동 vs 지금 이동)
 		const Protocol::MoveInfo& now = *monster->GetMoveInfo();
 		if (_monsterSendPolicy->ShouldSend(monster->lastSentMove, now, resendTick) == false)
 			continue;
 
+		monster->moveTick = _tick;
+		monster->moveIndex = pkt.moves_size();
 		Protocol::MoveEntry* entry = pkt.add_moves();
 		entry->set_object_id(id);
 		*entry->mutable_move_info() = now;
@@ -621,7 +783,7 @@ void Room::ApplyDamage(GameObject& target, uint64 attackerId, int32 damage)
 	BroadcastHp(target, damage, attackerId);
 }
 
-// S_SKILL을 모두에게. 플레이어 스킬(HandleSkill)과 몬스터 예고 공격(Monster::StartAttack) 공통
+// S_SKILL을 시전자가 보이는 사람에게. 플레이어 스킬(HandleSkill)과 몬스터 예고 공격(Monster::StartAttack) 공통
 //   yaw는 시전자의 지금 방향. cast_ms, range, hit_angle은 클라가 예고 범위를 그리는 데 씀 (즉시 스킬은 cast 0)
 void Room::BroadcastSkill(GameObject& caster, const SkillData& skill, uint64 targetId)
 {
@@ -633,10 +795,10 @@ void Room::BroadcastSkill(GameObject& caster, const SkillData& skill, uint64 tar
 	pkt.set_cast_ms(skill.castMs);
 	pkt.set_range(skill.range);
 	pkt.set_hit_angle(skill.hitAngleDeg);
-	Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
+	BroadcastToViewers(caster, ClientPacketHandler::MakeSendBuffer(pkt));
 }
 
-// target의 지금 HP를 모두에게. 데미지(ApplyDamage)와 회복(Monster가 스폰에 도착) 공통
+// target의 지금 HP를 target이 보이는 사람에게. 데미지(ApplyDamage)와 회복(Monster가 스폰에 도착) 공통
 void Room::BroadcastHp(GameObject& target, int32 damage, uint64 attackerId)
 {
 	Protocol::S_CHANGE_HP pkt;
@@ -644,21 +806,29 @@ void Room::BroadcastHp(GameObject& target, int32 damage, uint64 attackerId)
 	pkt.set_hp(target.GetStatInfo()->hp());
 	pkt.set_damage(damage);
 	pkt.set_attacker_id(attackerId);
-	Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
+	BroadcastToViewers(target, ClientPacketHandler::MakeSendBuffer(pkt));
 }
 
-// 몬스터 죽음: 방에서 빼고, 모두에게 알리고, 같은 스폰 줄로 리스폰 예약
+// 몬스터 죽음: 보던 사람에게 알리고, 방에서 빼고, 같은 스폰 줄로 리스폰 예약
 //   HandleSkill(틱 밖의 job)에서만 부름 -> UpdateMonsters가 _monsters를 도는 도중에 지우는 일이 없음 (반복자 무효화 방지)
 //   monster를 값(shared_ptr 복사)으로 받음: erase로 맵의 shared_ptr이 사라진 뒤에도 GetSpawn()을 써야 해서
 void Room::KillMonster(MonsterRef monster, uint64 killerId)
 {
 	const uint64 monsterId = monster->GetObjectId();
-	_monsters.erase(monsterId);	// 이제 공격 대상, 틱, 새로 들어온 사람의 S_SPAWN 어디에도 안 나옴
 
+	// 보던 사람에게 S_DIE + 시야 목록에서 지움 (클라는 S_DIE로 몬스터를 치움 -> S_DESPAWN은 따로 안 보냄)
 	Protocol::S_DIE pkt;
 	pkt.set_object_id(monsterId);
 	pkt.set_killer_id(killerId);
-	Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
+	SendBufferRef sendBuffer = ClientPacketHandler::MakeSendBuffer(pkt);
+	ForEachViewer(*monster, [&](const PlayerRef& viewer)
+		{
+			viewer->visible.erase(monsterId);
+			SendTo(viewer, sendBuffer);
+		});
+
+	_grid.Remove(monster);
+	_monsters.erase(monsterId);	// 이제 공격 대상, 틱, 시야 어디에도 안 나옴
 
 	const MonsterSpawnData& spawn = monster->GetSpawn();
 	LogLine() << "[Room] monster " << monsterId << " killed by " << killerId
@@ -689,7 +859,7 @@ void Room::KillPlayer(const PlayerRef& player, uint64 killerId)
 	pkt.set_object_id(player->GetObjectId());
 	pkt.set_killer_id(killerId);
 	pkt.set_revive_ms(static_cast<int32>(Player::REVIVE_DELAY_MS));
-	Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
+	BroadcastToViewers(*player, ClientPacketHandler::MakeSendBuffer(pkt));
 
 	LogLine() << "[Room] player " << player->GetObjectId() << " killed by " << killerId
 		<< ", revive in " << Player::REVIVE_DELAY_MS << "ms";
@@ -699,7 +869,8 @@ void Room::KillPlayer(const PlayerRef& player, uint64 killerId)
 	DoTimer(Player::REVIVE_DELAY_MS, &Room::RevivePlayer, player->GetObjectId());
 }
 
-// 부활: 시작 위치에서 HP 가득, MP 절반 -> 모두에게 S_REVIVE, 본인에게 MP
+// 부활: 시작 위치에서 HP 가득, MP 절반 -> 새 위치에서 나를 보는 사람에게 S_REVIVE, 본인에게 MP
+//   순간이동이라 옛 위치 주변 사람은 다음 틱 UpdateView에서 S_DESPAWN, 새 위치 주변 사람은 S_SPAWN을 받음
 void Room::RevivePlayer(uint64 playerId)
 {
 	PlayerRef player = FindPlayer(playerId);
@@ -707,22 +878,14 @@ void Room::RevivePlayer(uint64 playerId)
 		return;		// 그사이 나감
 
 	player->Revive();
+	_grid.Update(player);	// 시작 위치로 순간이동 -> 칸이 바뀌었을 수 있음
 
 	Protocol::S_REVIVE pkt;
 	*pkt.mutable_object() = player->GetObjectInfo();
-	Broadcast(ClientPacketHandler::MakeSendBuffer(pkt));
+	BroadcastToViewers(*player, ClientPacketHandler::MakeSendBuffer(pkt));
 	SendMp(player);
 
 	LogLine() << "[Room] player " << playerId << " revived at (" << Player::SPAWN_X << ", " << Player::SPAWN_Z << ")";
-}
-
-void Room::Broadcast(SendBufferRef sendBuffer, uint64 exceptId)
-{
-	for (auto& [id, player] : _players)
-	{
-		if (id != exceptId)
-			SendTo(player, sendBuffer);
-	}
 }
 
 // 큰 패킷 나누기: 항목이 많은 S_MOVE(틱마다)와 S_SPAWN(입장할 때)은 MAX_PACKET_BODY_BYTES씩 끊어서 여러 개로 보냄
@@ -730,8 +893,15 @@ void Room::Broadcast(SendBufferRef sendBuffer, uint64 exceptId)
 //   (이동 항목 약 45바이트 -> 한 틱에 약 130개, 객체 항목 약 55바이트 -> 방에 약 110개가 한계였음)
 //   ByteSizeLong: protobuf가 계산한 직렬화 크기. 반복 항목은 앞에 태그 1바이트 + 길이 1~2바이트가 더 붙어서 +3
 //   나뉜 S_MOVE는 server_tick이 같음 -> 클라는 항목만 적용하면 되고, 같은 틱 번호라고 버리면 안 됨
-void Room::BroadcastMoves(const Protocol::S_MOVE& all)
+void Room::SendMoves(const PlayerRef& player, Protocol::S_MOVE& all)
 {
+	// AOI 뒤로는 시야 안의 항목만이라 대부분 한 개로 충분 -> 나누지 않고 그대로
+	if (all.ByteSizeLong() <= MAX_PACKET_BODY_BYTES)
+	{
+		SendTo(player, ClientPacketHandler::MakeSendBuffer(all));
+		return;
+	}
+
 	Protocol::S_MOVE part;
 	part.set_server_tick(all.server_tick());
 	size_t partBytes = 0;
@@ -741,7 +911,7 @@ void Room::BroadcastMoves(const Protocol::S_MOVE& all)
 		const size_t entryBytes = entry.ByteSizeLong() + 3;
 		if (partBytes + entryBytes > MAX_PACKET_BODY_BYTES)
 		{
-			Broadcast(ClientPacketHandler::MakeSendBuffer(part));
+			SendTo(player, ClientPacketHandler::MakeSendBuffer(part));
 			part.clear_moves();
 			partBytes = 0;
 		}
@@ -750,7 +920,7 @@ void Room::BroadcastMoves(const Protocol::S_MOVE& all)
 	}
 
 	if (part.moves_size() > 0)
-		Broadcast(ClientPacketHandler::MakeSendBuffer(part));
+		SendTo(player, ClientPacketHandler::MakeSendBuffer(part));
 }
 
 void Room::SendSpawns(const PlayerRef& player, const Protocol::S_SPAWN& all)

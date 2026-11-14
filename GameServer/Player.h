@@ -134,6 +134,12 @@ public:
 	xunordered_map<int32, uint64>	skillReadyTick;	// 스킬 id -> 다시 쓸 수 있는 서버 틱. 처음 쓰는 스킬은 항목이 없음 = 0 = 바로 사용 가능
 	int32	mp = MAX_MP;	// 지금 MP (입장할 때 가득)
 
+	// --- 시야 (Room의 JobQueue 안에서만 접근 -> 락 없음) ---
+	//   지금 이 클라에 보이는 객체 id -> 마지막으로 "시야 안"이라고 확인한 틱
+	//   매 틱 Room::UpdateView가 확인한 것만 지금 틱으로 바꾸고, 지금 틱이 아닌 것(= 이번에 확인 안 됨)은 S_DESPAWN 후 지움
+	//   나 자신은 넣지 않음 (내 이동은 항상 받음)
+	xunordered_map<uint64, uint64>	visible;
+
 private:
 	weak_ptr<GameSession>	_session;	// 세션이 Player를 shared_ptr로 들고 있으므로 이쪽은 weak (순환 참조 방지)
 	int64					_accountId = 0;	// 토큰의 sub = player_character의 account_id (저장할 때 어느 줄인지)
