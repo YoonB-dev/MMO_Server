@@ -50,7 +50,7 @@ $osInfo   = Get-CimInstance Win32_OperatingSystem
 $ramGb    = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1)
 $commit   = Get-GitText @('rev-parse', '--short', 'HEAD')
 $branch   = Get-GitText @('rev-parse', '--abbrev-ref', 'HEAD')
-$changed  = @(& git -C $repoRoot status --porcelain --untracked-files=no)   # 커밋 안 된 변경 (새 파일은 제외)
+$changed  = @(& git -C $repoRoot status --porcelain --untracked-files=no -- . ':(exclude)Docs/LoadTest/results.csv')   # 커밋 안 된 변경 (새 파일, 이 스크립트가 쓰는 results.csv는 제외)
 $dirty    = $changed.Count -gt 0
 $started  = Get-Date
 
