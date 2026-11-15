@@ -228,6 +228,11 @@ static void StartChaseTest(PacketSessionRef& session, const Protocol::S_SPAWN& p
 //   = 서버 전송 정책(angle)이 꺾임을 보고 바로 보낸 것 -> 'TURN_SEND'
 static constexpr uint64 SERVER_RESEND_TICKS = 4;	// 서버 Room::MOVE_RESEND_TICKS와 같은 값
 
+// --flee-test 도망 속도 비율: 서버 이동 속도 5m/s x 0.8 = 4m/s (몬스터 추격 3.5m/s보다 조금만 빠름)
+//   거리가 초당 0.5m씩만 벌어져 lost(12m)까지 약 20초 -> 그 전에 몬스터가 스폰에서 20m(leash)를 넘음
+//   (전에는 5m/s로 도망쳐 약 7초 만에 lost -> 몬스터가 스폰 가까이서 쫓기 시작하면 lost가 먼저 났음)
+static constexpr float FLEE_DIR_SCALE = 0.8f;
+
 static void UpdateChaseTest(PacketSessionRef& session, uint64 serverTick, const Protocol::MoveEntry& entry)
 {
 	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
@@ -282,9 +287,9 @@ static void UpdateChaseTest(PacketSessionRef& session, uint64 serverTick, const 
 				me->turnStrafeSent = true;
 			}
 
-			// --flee-test: 몬스터 반대 방향 (-dx, -dz)로 계속 달림 -> 몬스터가 쫓다가 스폰에서 20m를 넘으면 포기하고 돌아감
-			if (GFleeTest)
-				SendMoveInput(session, -dx, -dz, ++me->chaseSeq);
+			// --flee-test: 몬스터 반대 방향으로 4m/s로 계속 달림 -> 몬스터가 쫓다가 스폰에서 20m를 넘으면 포기하고 돌아감
+			if (GFleeTest && dist > 0.01f)
+				SendMoveInput(session, -dx / dist * FLEE_DIR_SCALE, -dz / dist * FLEE_DIR_SCALE, ++me->chaseSeq);
 
 			// --attack-test: 몬스터가 바로 앞(1.5m)에 멈췄으니 검증용 공격 묶음
 			if (GAttackTest)
