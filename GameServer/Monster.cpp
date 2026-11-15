@@ -136,6 +136,16 @@ void Monster::StartAttack(Room& room, float dx, float dz)
 	_attackCooldown = skill.cooldownMs / 1000.f;
 
 	SetState(MonsterState::Attack);
+
+	// 지금 보는 사람에게는 아래 S_SKILL로, 나중에 보게 되는 사람에게는 S_SPAWN의 cast_info로 감
+	Protocol::CastInfo* cast = GetObjectInfo().mutable_cast_info();
+	cast->set_skill_id(skill.skillId);
+	cast->set_remaining_ms(skill.castMs);
+	cast->set_total_ms(skill.castMs);
+	cast->set_yaw(GetPosInfo()->yaw());
+	cast->set_range(skill.range);
+	cast->set_hit_angle(skill.hitAngleDeg);
+
 	room.BroadcastSkill(*this, skill, _targetId);
 }
 
@@ -150,6 +160,10 @@ void Monster::UpdateAttack(Room& room, float dt)
 		return GiveUpChase("dead");		// 다른 몬스터에게 죽음 -> 시전 취소
 
 	_castRemaining -= dt;
+
+	// S_SPAWN 복사본이 항상 지금 값이 되게 (int 하나 쓰기라 매 틱 해도 비용 없음)
+	GetObjectInfo().mutable_cast_info()->set_remaining_ms(static_cast<int32>(_castRemaining * 1000.f));
+
 	if (_castRemaining > 0.f)
 		return;
 
@@ -232,6 +246,10 @@ void Monster::SetState(MonsterState next)
 {
 	const MonsterState prev = _state;
 	_state = next;
+
+	// 시전이 끝나는 길(판정 후 Chase, 취소 후 Return)이 여러 개라도 지우는 곳은 여기 하나
+	if (prev == MonsterState::Attack && next != MonsterState::Attack)
+		GetObjectInfo().clear_cast_info();
 
 	switch (next)
 	{

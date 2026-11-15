@@ -33,6 +33,18 @@ message StatInfo
 	int32 max_hp = 2;
 }
 
+// 진행 중인 시전 (몬스터 예고 공격). 시전 중이 아니면 ObjectInfo에 없음 (has_cast_info() == false)
+//   S_SPAWN으로 처음 보는 클라가 "이미 시전 중"인 걸 알 수 있게 (시작 순간의 S_SKILL을 못 받았어도)
+message CastInfo
+{
+	int32 skill_id = 1;
+	int32 remaining_ms = 2;	// 남은 예고 시간 (보낸 순간 기준)
+	int32 total_ms = 3;		// 전체 예고 시간 -> 게이지 비율 = 1 - remaining / total
+	float yaw = 4;			// 고정된 판정 방향 (도)
+	float range = 5;		// 부채꼴 반지름 (m)
+	float hit_angle = 6;	// 부채꼴 좌우 반각 (도)
+}
+
 // 월드에 존재하는 객체 하나 (플레이어, 몬스터 공통)
 message ObjectInfo
 {
@@ -40,6 +52,7 @@ message ObjectInfo
 	ObjectType object_type = 2;
 	MoveInfo move_info = 3;
 	StatInfo stat_info = 4;		// HP바 표시용. S_ENTER_GAME, S_SPAWN에 자동으로 같이 실림
+	CastInfo cast_info = 5;		// 시전 중일 때만 있음 (몬스터 예고 공격). S_SPAWN에 자동으로 같이 실림
 }
 
 // S_MOVE 안의 한 명분

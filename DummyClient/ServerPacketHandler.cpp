@@ -354,6 +354,9 @@ bool Handle_S_SPAWN(PacketSessionRef& session, Protocol::S_SPAWN& pkt)
 			line << "(monster hp=" << object.stat_info().hp() << ")";	// stat_info가 실려 오는지 확인용
 			me->monsterIds.insert(object.object_id());
 		}
+		if (object.has_cast_info())	// 시전 도중에 보이게 된 객체 (예고 게이지가 이미 일부 찬 상태)
+			line << "(casting skill=" << object.cast_info().skill_id()
+				 << " " << object.cast_info().remaining_ms() << "/" << object.cast_info().total_ms() << "ms)";
 	}
 	if (GBot == false)
 		Log(me->GetClientId(), line.str());
