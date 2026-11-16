@@ -1,8 +1,9 @@
 ﻿using OutGameServer;
 using OutGameServer.Auth;
+using OutGameServer.Characters;
 using OutGameServer.Data;
 
-// 아웃게임 서버: 게임 밖에서 하는 일. 지금은 가입 / 로그인 / 토큰 갱신 / 로그아웃 (/auth/*)
+// 아웃게임 서버: 게임 밖에서 하는 일. 가입 / 로그인 / 토큰 갱신 / 로그아웃 (/auth/*), 로비의 캐릭터 목록 / 생성 (/characters)
 //   게임 서버(IOCP)는 여기서 발급한 Access Token(JWT)만 검증하고, 비밀번호는 전혀 모름
 var builder = WebApplication.CreateBuilder(args);
 
@@ -17,7 +18,9 @@ builder.Services.AddSingleton(options);
 builder.Services.AddSingleton<PasswordHasher>();
 builder.Services.AddSingleton<TokenService>();
 builder.Services.AddSingleton<AccountRepository>();
+builder.Services.AddSingleton<CharacterRepository>();
 
 WebApplication app = builder.Build();
 app.MapAuthEndpoints();
+app.MapCharacterEndpoints();
 app.Run();

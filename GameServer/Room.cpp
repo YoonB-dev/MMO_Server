@@ -31,6 +31,10 @@
 //   30m 안에 들어오면 S_SPAWN, 35m 밖으로 나가면 S_DESPAWN, 계속 보이는 것 중 움직인 것만 S_MOVE
 //   이벤트(S_SKILL, S_CHANGE_HP, S_DIE, S_REVIVE)는 그 객체가 보이는 사람에게만 (BroadcastToViewers)
 //
+// 채팅 (C_CHAT -> HandleChat)
+//   검사(범위 값, 빈 문자열, 100글자, 제어 문자) -> 0.5초 쿨타임 -> S_CHAT(보낸 사람 이름 포함)
+//   주변은 BroadcastToViewers (나를 보는 사람 + 나), 방 전체는 _players 전원
+//
 // 전투 (C_SKILL -> HandleSkill)
 //   검사 6개 (타겟 문제는 대상 필수 스킬이면 거절, 아니면 빗나감) -> 확정(쿨타임, MP) -> S_SKILL
 //   -> 빗나감이면 끝, 맞았으면 ApplyDamage(S_CHANGE_HP)
@@ -781,6 +785,69 @@ void Room::ApplyDamage(GameObject& target, uint64 attackerId, int32 damage)
 	stat->set_hp(hp);
 
 	BroadcastHp(target, damage, attackerId);
+}
+
+// 채팅 내용 검사. 문제가 있으면 거절 이유, 없으면 nullptr
+//   UTF-8 형식 자체는 protobuf가 파싱할 때 검사함 (proto3 string은 잘못된 UTF-8이면 파싱 실패)
+static const char* CheckChatText(const string& text, int32 maxChars)
+{
+	int32 chars = 0;
+	bool onlySpaces = true;
+	for (const unsigned char c : text)
+	{
+		if (c < 0x20 || c == 0x7F)
+			return "control_char";		// 줄바꿈 등: 다른 줄인 척하는 가짜 시스템 메시지 방지
+		if (c != ' ')
+			onlySpaces = false;
+		if ((c & 0xC0) != 0x80)			// UTF-8에서 10xxxxxx는 앞 글자의 이어지는 바이트 -> 글자 시작만 셈
+			chars++;
+	}
+	if (onlySpaces)
+		return "empty";					// 빈 문자열, 공백만
+	if (chars > maxChars)
+		return "too_long";
+	return nullptr;
+}
+
+// C_CHAT: 검사 -> 쿨타임 -> 범위 안 전원에게 S_CHAT (보낸 사람 포함)
+//   내용 검사에서 거절되면 쿨타임을 안 씀 (오타 때문에 0.5초 묶이지 않게)
+void Room::HandleChat(PlayerRef player, Protocol::ChatChannel channel, string message)
+{
+	if (_players.count(player->GetObjectId()) == 0)
+		return;		// 줄에 들어오기 전에 나감
+
+	const char* reason = nullptr;
+	if (Protocol::ChatChannel_IsValid(channel) == false)
+		reason = "bad_channel";			// proto3 enum은 모르는 숫자도 그대로 들어옴
+	else
+		reason = CheckChatText(message, CHAT_MAX_CHARS);
+	if (reason == nullptr && _tick < player->chatReadyTick)
+		reason = "cooldown";
+
+	if (reason != nullptr)
+	{
+		LogLine() << "[Room] reject chat: player " << player->GetObjectId() << ", reason " << reason;
+		return;
+	}
+	player->chatReadyTick = _tick + CHAT_COOLDOWN_TICKS;
+
+	// 패킷은 한 번만 만들고 같은 버퍼를 여러 명에게 (내용, 이름은 로그에 안 남김: 개인정보 + 콘솔 한글 깨짐)
+	Protocol::S_CHAT pkt;
+	pkt.set_object_id(player->GetObjectId());
+	pkt.set_channel(channel);
+	pkt.set_message(std::move(message));
+	pkt.set_sender_name(player->GetObjectInfo().name());
+	SendBufferRef sendBuffer = ClientPacketHandler::MakeSendBuffer(pkt);
+
+	if (channel == Protocol::CHAT_CHANNEL_NEARBY)
+	{
+		BroadcastToViewers(*player, sendBuffer);	// 나를 visible에 가진 사람 + 나 (AOI 그대로)
+	}
+	else
+	{
+		for (auto& [id, other] : _players)
+			SendTo(other, sendBuffer);
+	}
 }
 
 // S_SKILL을 시전자가 보이는 사람에게. 플레이어 스킬(HandleSkill)과 몬스터 예고 공격(Monster::StartAttack) 공통

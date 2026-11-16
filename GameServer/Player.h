@@ -10,20 +10,23 @@ struct MoveInput
 	uint32	seq = 0;		// 클라가 붙인 입력 번호 1, 2, 3 ...
 };
 
-// DB player_character 한 줄 (계정당 캐릭터 1개). DB 큐가 불러와서 Player를 만들 때 씀
+// DB player_character 한 줄 (계정당 여러 캐릭터, 아웃게임 서버가 만듦). DB 큐가 불러와서 Player를 만들 때 씀
 struct CharacterData
 {
-	int64	accountId = 0;
+	int64	characterId = 0;	// player_character PK (저장할 때 어느 줄인지)
+	int64	accountId = 0;		// 계정 단위 동시 접속 관리(DB 줄의 _online)용
 	float	x = 0.f;
 	float	z = 0.f;
 	int32	hp = 0;
 	int32	mp = 0;
+	WCHAR	nickname[21] = {};	// 불러올 때만 채움 (게임 중에 안 바뀌어서 저장하지 않음). 최대 20글자 + 끝 0
 };
 
 // 플레이어 = 월드 객체 + 접속 중인 세션 + 계정
 class Player : public GameObject
 {
 	// 플레이어 기본 수치 (몬스터, 스킬과 달리 DB가 아니라 코드 상수)
+	//   새 캐릭터 기본값(Database/Migrations/009의 DEFAULT)과 같은 값이어야 함: MAX_HP, MAX_MP, SPAWN_X, SPAWN_Z
 	static constexpr int32	MAX_HP = 100;
 
 	// 1초당 자연 회복량. 회복 규칙은 Regen() 한 곳에만 있음
@@ -50,7 +53,7 @@ public:
 	// DB에서 불러온 값으로 만듦. 값이 범위를 벗어나 있어도(DB를 손으로 고친 경우 등) 서버가 망가지지 않게 잘라서 씀
 	//   HP 0(죽은 채로 저장됨)이면 시작 위치에서 HP 가득으로 (부활과 같은 처리)
 	Player(GameSessionRef session, const CharacterData& data)
-		: GameObject(Protocol::OBJECT_TYPE_PLAYER), _session(session), _accountId(data.accountId)
+		: GameObject(Protocol::OBJECT_TYPE_PLAYER), _session(session), _characterId(data.characterId), _accountId(data.accountId)
 	{
 		const bool dead = (data.hp <= 0);
 		GetPosInfo()->set_x(dead ? SPAWN_X : data.x);
@@ -58,20 +61,20 @@ public:
 		GetStatInfo()->set_hp(dead ? MAX_HP : (data.hp > MAX_HP ? MAX_HP : data.hp));
 		GetStatInfo()->set_max_hp(MAX_HP);
 		mp = (data.mp < 0) ? 0 : (data.mp > MAX_MP ? MAX_MP : data.mp);
-	}
 
-	// 처음 들어온 계정의 캐릭터: 시작 위치, HP / MP 가득 (DB 큐가 player_character에 넣음)
-	static CharacterData NewCharacter(int64 accountId)
-	{
-		return CharacterData{ accountId, SPAWN_X, SPAWN_Z, MAX_HP, MAX_MP };
+		// 닉네임 WCHAR(UTF-16, DB에서 옴) -> UTF-8(protobuf string). 한글이 있어서 한 글자씩 자르면 깨짐
+		char utf8[64] = {};	// 최대 20글자 x 한 글자 최대 3바이트 + 끝 0
+		const int32 len = ::WideCharToMultiByte(CP_UTF8, 0, data.nickname, -1, utf8, sizeof(utf8), nullptr, nullptr);
+		GetObjectInfo().set_name(len > 0 ? utf8 : "");
 	}
 
 	int64	GetAccountId() const { return _accountId; }
 
 	// 지금 상태를 DB 한 줄 모양으로 복사 (Room 줄 안에서만 호출 -> 저장은 DB 줄이 이 복사본으로)
+	//   닉네임은 저장하지 않아서 비워 둠
 	CharacterData ToCharacterData()
 	{
-		return CharacterData{ _accountId, GetPosInfo()->x(), GetPosInfo()->z(), GetStatInfo()->hp(), mp };
+		return CharacterData{ _characterId, _accountId, GetPosInfo()->x(), GetPosInfo()->z(), GetStatInfo()->hp(), mp };
 	}
 
 	// 연결이 이미 끊겼으면 nullptr
@@ -140,7 +143,11 @@ public:
 	//   나 자신은 넣지 않음 (내 이동은 항상 받음)
 	xunordered_map<uint64, uint64>	visible;
 
+	// --- 채팅 (Room의 JobQueue 안에서만 접근 -> 락 없음) ---
+	uint64	chatReadyTick = 0;	// 이 틱부터 다시 채팅 가능 (도배 방지). 0 = 바로 가능
+
 private:
 	weak_ptr<GameSession>	_session;	// 세션이 Player를 shared_ptr로 들고 있으므로 이쪽은 weak (순환 참조 방지)
-	int64					_accountId = 0;	// 토큰의 sub = player_character의 account_id (저장할 때 어느 줄인지)
+	int64					_characterId = 0;	// player_character의 character_id (저장할 때 어느 줄인지)
+	int64					_accountId = 0;		// 토큰의 sub (같은 계정 동시 접속 관리용)
 };

@@ -6,7 +6,7 @@
 #include "AuthClient.h"
 
 // 접속 확인용 더미 클라이언트: N명이 아웃게임 서버에 로그인 -> 게임 서버에 접속해서 토큰으로 입장하고, 1초마다 C_PING -> S_PING 왕복 시간 출력
-//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--account-prefix dummy] [--auth-host localhost] [--auth-port 7100] [--token T] [--no-ping] [--input-test] [--move-test] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test] [--ranged-test] [--dodge-test] [--death-test] [--bot] [--area M]
+//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--account-prefix dummy] [--auth-host localhost] [--auth-port 7100] [--token T] [--character-id N] [--no-ping] [--input-test] [--move-test] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test] [--ranged-test] [--dodge-test] [--death-test] [--chat-test] [--chat-reply] [--bot] [--area M]
 //   부하 테스트(Test/Load/Run-Load.ps1)는 --bot --area 100 --no-ping
 //   인자 없이 실행하면 3명, 127.0.0.1:7777, ping 사용 (Test/Run-Test.ps1에서 옵션을 넘겨서 사용)
 static const int32 IOCP_THREAD_COUNT = 2;
@@ -21,6 +21,7 @@ struct ClientOptions
 	uint16	authPort = 7100;
 	bool	useToken = false;			// --token을 줬으면 로그인 없이 모든 클라가 token을 그대로 보냄 (토큰 공격 테스트용, 빈 값도 가능)
 	string	token;
+	int64	characterId = 0;			// --token과 같이 쓰는 입장 캐릭터 (--character-id). 로그인할 때는 로비 목록의 첫 캐릭터
 	bool	ping = true;
 	bool	inputTest = false;	// 입장 후 검증용 이동 입력 묶음 전송
 	bool	moveTest = false;	// 입장 후 오른쪽 이동 -> 멈춤 -> 위치 판정
@@ -32,6 +33,8 @@ struct ClientOptions
 	bool	rangedTest = false;	// 몬스터에게서 10m 떨어진 곳에 멈춰 원거리 스킬 (타겟 고르기/조준은 chaseTest 것을 씀)
 	bool	dodgeTest = false;	// chaseTest 후 나를 노린 몬스터 예고 공격을 보고 반대로 달려서 피함
 	bool	deathTest = false;	// chaseTest 후 맞아 죽으면, 죽은 상태에서 이동/공격을 보냄
+	bool	chatTest = false;	// 입장 후 거절될 채팅 3개 + 주변 채팅 + 바로 방 채팅(쿨타임 거절)
+	bool	chatReply = false;	// 다른 사람의 주변 채팅을 처음 받으면 방 전체로 답장
 	bool	bot = false;		// 부하 테스트: 무작위 지점을 계속 돌아다님 + 패킷마다 찍는 로그 끔
 	float	area = 100.f;		// 봇이 돌아다니는 범위 ±area (m)
 };
@@ -69,6 +72,8 @@ ClientOptions ParseOptions(int argc, char* argv[])
 			options.useToken = true;
 			options.token = argv[++i];
 		}
+		else if (arg == "--character-id" && hasValue)
+			options.characterId = ::_atoi64(argv[++i]);
 		else if (arg == "--no-ping")
 			options.ping = false;
 		else if (arg == "--input-test")
@@ -91,6 +96,10 @@ ClientOptions ParseOptions(int argc, char* argv[])
 			options.dodgeTest = true;
 		else if (arg == "--death-test")
 			options.deathTest = true;
+		else if (arg == "--chat-test")
+			options.chatTest = true;
+		else if (arg == "--chat-reply")
+			options.chatReply = true;
 		else if (arg == "--bot")
 			options.bot = true;
 		else if (arg == "--area" && hasValue)
@@ -119,6 +128,8 @@ int main(int argc, char* argv[])
 	GRangedTest = options.rangedTest;
 	GDodgeTest = options.dodgeTest;
 	GDeathTest = options.deathTest;
+	GChatTest = options.chatTest;
+	GChatReply = options.chatReply;
 	GBot = options.bot;
 	GBotArea = options.area;
 
@@ -127,15 +138,15 @@ int main(int argc, char* argv[])
 	// 입장 토큰 준비 (접속 전에 전부 끝냄 -> OnConnected에서는 읽기만 하므로 락 없음)
 	if (options.useToken)
 	{
-		GAccessTokens.assign(options.count, options.token);
-		Log("[Client] Using the given token for all " + to_string(options.count) + " client(s)");
+		GLogins.assign(options.count, LoginInfo{ options.token, options.characterId });
+		Log("[Client] Using the given token for all " + to_string(options.count) + " client(s), character " + to_string(options.characterId));
 	}
 	else
 	{
-		GAccessTokens = LoginAll(options.authHost, options.authPort, options.accountPrefix, options.count);
-		for (const string& token : GAccessTokens)
+		GLogins = LoginAll(options.authHost, options.authPort, options.accountPrefix, options.count);
+		for (const LoginInfo& login : GLogins)
 		{
-			if (token.empty())
+			if (login.token.empty())
 			{
 				Log("[Client] Login failed (is OutGameServer running on port " + to_string(options.authPort) + "?)");
 				return -1;

@@ -14,12 +14,23 @@ public sealed class TokenService
 	private readonly AuthOptions _options;
 	private readonly SigningCredentials _signing;
 	private readonly JsonWebTokenHandler _handler = new();
+	private readonly TokenValidationParameters _validation;
 
 	public TokenService(AuthOptions options)
 	{
 		_options = options;
 		// HS256 = HMAC-SHA256: 같은 비밀키로 서명하고 검증 (게임 서버도 같은 키를 가짐)
 		_signing = new SigningCredentials(new SymmetricSecurityKey(options.JwtSecret), SecurityAlgorithms.HmacSha256);
+
+		// 검증 기준 = 게임 서버와 같음: 서명(HS256만), 발급자, 대상, 만료
+		_validation = new TokenValidationParameters
+		{
+			ValidIssuer = options.Issuer,
+			ValidAudience = options.Audience,
+			IssuerSigningKey = new SymmetricSecurityKey(options.JwtSecret),
+			ValidAlgorithms = [SecurityAlgorithms.HmacSha256],	// alg none이나 다른 알고리즘으로 바꾼 토큰 거절
+			ClockSkew = TimeSpan.FromSeconds(30),				// 서버 시계 차이 여유 (기본 5분은 너무 김)
+		};
 	}
 
 	public int AccessTokenSeconds => _options.AccessTokenMinutes * 60;
@@ -46,6 +57,15 @@ public sealed class TokenService
 			SigningCredentials = _signing,
 		};
 		return _handler.CreateToken(descriptor);
+	}
+
+	// 로비 API용 Access Token 검증. 통과하면 account_id(sub), 아니면 null
+	public async Task<long?> ValidateAccessTokenAsync(string token)
+	{
+		TokenValidationResult result = await _handler.ValidateTokenAsync(token, _validation);
+		if (result.IsValid == false)
+			return null;
+		return long.TryParse(result.Claims[JwtRegisteredClaimNames.Sub] as string, out long accountId) ? accountId : null;
 	}
 
 	// Refresh Token 원문: 랜덤 32바이트를 URL에 써도 되는 base64로 (클라에게만 주고 서버는 안 들고 있음)
