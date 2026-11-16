@@ -79,3 +79,16 @@ bool Handle_C_SKILL(PacketSessionRef& session, Protocol::C_SKILL& pkt)
 	GRoom->DoAsync(&Room::HandleSkill, player, pkt.skill_id(), pkt.target_id());
 	return true;
 }
+
+bool Handle_C_CHAT(PacketSessionRef& session, Protocol::C_CHAT& pkt)
+{
+	GameSessionRef gameSession = static_pointer_cast<GameSession>(session);
+	PlayerRef player = gameSession->GetPlayer();
+	if (player == nullptr)
+		return false;	// 아직 입장 안 한 세션의 채팅
+
+	// 검사와 전송은 Room의 줄에서 (쿨타임, 시야 목록은 Room 안에서만 만짐)
+	//   문자열은 복사 대신 move: pkt는 이 함수가 끝나면 사라지므로 내용물을 Job으로 옮김
+	GRoom->DoAsync(&Room::HandleChat, player, pkt.channel(), std::move(*pkt.mutable_message()));
+	return true;
+}

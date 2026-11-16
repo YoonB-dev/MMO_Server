@@ -97,6 +97,39 @@ bool Handle_S_PING(PacketSessionRef& session, Protocol::S_PING& pkt)
 	return true;
 }
 
+static void SendChat(PacketSessionRef& session, Protocol::ChatChannel channel, const string& message)
+{
+	Protocol::C_CHAT pkt;
+	pkt.set_channel(channel);
+	pkt.set_message(message);
+	session->Send(ServerPacketHandler::MakeSendBuffer(pkt));
+}
+
+// UTF-8 바이트를 16진수로 (한글 이름은 콘솔/로그 파일 인코딩에 따라 깨져 보여서, 테스트는 이 값으로 비교)
+static string HexOf(const string& text)
+{
+	static const char* digits = "0123456789abcdef";
+	string hex;
+	for (const unsigned char c : text)
+	{
+		hex.push_back(digits[c >> 4]);
+		hex.push_back(digits[c & 0x0F]);
+	}
+	return hex;
+}
+
+// 채팅 확인용 (Test/Scenarios/Chat.ps1, --chat-test)
+//   거절될 것 3개(빈 문자열, 101글자, 줄바꿈) -> 주변 "hello"(통과) -> 바로 방 "again"(0.5초 쿨타임으로 거절)
+//   서버는 내용 검사에서 거절된 건 쿨타임을 안 쓰므로 "hello"는 통과해야 함
+static void SendChatTestBurst(PacketSessionRef& session)
+{
+	SendChat(session, Protocol::CHAT_CHANNEL_NEARBY, "");
+	SendChat(session, Protocol::CHAT_CHANNEL_NEARBY, string(101, 'x'));
+	SendChat(session, Protocol::CHAT_CHANNEL_NEARBY, "a\nb");
+	SendChat(session, Protocol::CHAT_CHANNEL_NEARBY, "hello");
+	SendChat(session, Protocol::CHAT_CHANNEL_ROOM, "again");
+}
+
 static void SendMoveInput(PacketSessionRef& session, float dirX, float dirZ, uint32 seq)
 {
 	Protocol::C_MOVE_INPUT pkt;
@@ -164,7 +197,7 @@ bool Handle_S_ENTER_GAME(PacketSessionRef& session, Protocol::S_ENTER_GAME& pkt)
 	{
 		const Protocol::PosInfo& pos = pkt.player().move_info().pos_info();
 		line << " pos=(" << pos.x() << ", " << pos.z() << ") hp=" << pkt.player().stat_info().hp();	// 저장된 캐릭터를 불러왔는지 확인용
-		line << " name=" << pkt.player().name();	// 테스트 닉네임은 영문/숫자라 콘솔에 그대로 찍힘
+		line << " name=" << pkt.player().name() << " name_hex=" << HexOf(pkt.player().name());	// 한글 이름은 name_hex로 비교
 	}
 	if (pkt.success() == false)
 		line << " error=" << pkt.error();	// Enum.proto EnterGameError (1 토큰 오류, 2 만료, 3 중복 요청, 4 서버 오류, 5 캐릭터 없음/남의 것)
@@ -184,6 +217,8 @@ bool Handle_S_ENTER_GAME(PacketSessionRef& session, Protocol::S_ENTER_GAME& pkt)
 		SendMoveInput(session, 100.f, 0.f, 1);	// 오른쪽. 길이 100 -> 서버가 1로 줄여야 정상 속도
 	if (GBot)
 		PickBotTarget(session);
+	if (GChatTest)
+		SendChatTestBurst(session);
 	return true;
 }
 
@@ -572,5 +607,24 @@ bool Handle_S_CHANGE_MP(PacketSessionRef& session, Protocol::S_CHANGE_MP& pkt)
 	ostringstream line;
 	line << "S_CHANGE_MP mp=" << pkt.mp();
 	Log(ClientIdOf(session), line.str());
+	return true;
+}
+
+// 채팅: 보낸 사람 이름(영문은 from, 한글 비교용 from_hex)과 내용 (테스트 문구는 영문)
+//   --chat-reply: 다른 사람의 주변 채팅을 처음 받으면 방 전체로 답장 (내 쿨타임은 비어 있어서 통과해야 함)
+bool Handle_S_CHAT(PacketSessionRef& session, Protocol::S_CHAT& pkt)
+{
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+
+	ostringstream line;
+	line << "S_CHAT channel=" << pkt.channel() << " from=" << pkt.sender_name() << " from_hex=" << HexOf(pkt.sender_name())
+		<< " id=" << pkt.object_id() << " text=" << pkt.message();
+	Log(me->GetClientId(), line.str());
+
+	if (GChatReply && me->chatReplied == false && pkt.channel() == Protocol::CHAT_CHANNEL_NEARBY && pkt.object_id() != me->myId)
+	{
+		me->chatReplied = true;
+		SendChat(session, Protocol::CHAT_CHANNEL_ROOM, "reply");
+	}
 	return true;
 }

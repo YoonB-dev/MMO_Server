@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "JobQueue.h"
 #include "Grid.h"
+#include "Enum.pb.h"	// Protocol::ChatChannel (enum은 class처럼 이름만 미리 선언해 둘 수 없어서 헤더를 포함)
 
 // 매개변수로만 쓰는 타입은 선언만 (무거운 헤더를 include하지 않으려고, 정의는 Room.cpp에서 include)
 namespace Protocol { class S_MOVE; class S_SPAWN; }
@@ -38,6 +39,9 @@ class Room : public JobQueue
 	static constexpr float	VIEW_LEAVE_RADIUS = 35.f;	// 5m = 1초 동안 걷는 거리. Grid 칸 크기로도 씀 (3x3칸이면 이 반경을 다 덮음)
 	static constexpr float	VIEW_EVENT_SLACK = 1.f;	// 이벤트 받는 사람 찾을 때 여유 (틱 도중에는 위치가 시야 계산 뒤로 한 틱만큼 움직였을 수 있음)
 	static constexpr float	SKILL_RANGE_SLACK = 1.f;	// 사거리 여유 (m). 클라가 보는 위치는 지연만큼 다름 (몬스터 4m/s x 왕복 200ms = 0.8m)
+	// 채팅 제한
+	static constexpr int32	CHAT_MAX_CHARS = 100;		// 글자 수 (바이트 아님. 한글도 1글자)
+	static constexpr uint64	CHAT_COOLDOWN_TICKS = 10;	// 0.5초에 한 번
 
 	// 타겟 검사 결과 (HandleSkill의 4~6번)
 	enum class TargetCheck { Ok, NoTarget, BadTarget, Invulnerable, OutOfRange };
@@ -70,6 +74,7 @@ public:
 	void	Leave(PlayerRef player);	// 방에서 빼기 + 저장 요청 (저장할 값을 꺼내야 해서 id가 아니라 Player)
 	void	HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 buttons, uint32 seq);
 	void	HandleSkill(PlayerRef player, int32 skillId, uint64 targetId);
+	void	HandleChat(PlayerRef player, Protocol::ChatChannel channel, string message);	// C_CHAT
 
 	// 몬스터 AI가 쓰는 조회/알림 (Room JobQueue 안, 틱 도중에만 호출)
 	PlayerRef	FindPlayer(uint64 objectId);

@@ -27,3 +27,10 @@ enum EnterGameError
 	ENTER_GAME_ERROR_SERVER_ERROR = 4;		// DB 실패 등
 	ENTER_GAME_ERROR_INVALID_CHARACTER = 5;	// 없는 캐릭터이거나 내 계정 캐릭터가 아님 (둘을 구분하지 않음: 남의 캐릭터가 있는지 알려 주지 않음)
 }
+
+// 채팅 범위
+enum ChatChannel
+{
+	CHAT_CHANNEL_NEARBY = 0;	// 주변: 나를 볼 수 있는 사람 (시야 35m, 나 포함)
+	CHAT_CHANNEL_ROOM = 1;		// 방 전체
+}

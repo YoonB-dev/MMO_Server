@@ -143,6 +143,9 @@ public:
 	//   나 자신은 넣지 않음 (내 이동은 항상 받음)
 	xunordered_map<uint64, uint64>	visible;
 
+	// --- 채팅 (Room의 JobQueue 안에서만 접근 -> 락 없음) ---
+	uint64	chatReadyTick = 0;	// 이 틱부터 다시 채팅 가능 (도배 방지). 0 = 바로 가능
+
 private:
 	weak_ptr<GameSession>	_session;	// 세션이 Player를 shared_ptr로 들고 있으므로 이쪽은 weak (순환 참조 방지)
 	int64					_characterId = 0;	// player_character의 character_id (저장할 때 어느 줄인지)
