@@ -6,7 +6,7 @@
 #include "AuthClient.h"
 
 // 접속 확인용 더미 클라이언트: N명이 아웃게임 서버에 로그인 -> 게임 서버에 접속해서 토큰으로 입장하고, 1초마다 C_PING -> S_PING 왕복 시간 출력
-//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--account-prefix dummy] [--auth-host localhost] [--auth-port 7100] [--token T] [--no-ping] [--input-test] [--move-test] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test] [--ranged-test] [--dodge-test] [--death-test] [--bot] [--area M]
+//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--account-prefix dummy] [--auth-host localhost] [--auth-port 7100] [--token T] [--character-id N] [--no-ping] [--input-test] [--move-test] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test] [--ranged-test] [--dodge-test] [--death-test] [--bot] [--area M]
 //   부하 테스트(Test/Load/Run-Load.ps1)는 --bot --area 100 --no-ping
 //   인자 없이 실행하면 3명, 127.0.0.1:7777, ping 사용 (Test/Run-Test.ps1에서 옵션을 넘겨서 사용)
 static const int32 IOCP_THREAD_COUNT = 2;
@@ -21,6 +21,7 @@ struct ClientOptions
 	uint16	authPort = 7100;
 	bool	useToken = false;			// --token을 줬으면 로그인 없이 모든 클라가 token을 그대로 보냄 (토큰 공격 테스트용, 빈 값도 가능)
 	string	token;
+	int64	characterId = 0;			// --token과 같이 쓰는 입장 캐릭터 (--character-id). 로그인할 때는 로비 목록의 첫 캐릭터
 	bool	ping = true;
 	bool	inputTest = false;	// 입장 후 검증용 이동 입력 묶음 전송
 	bool	moveTest = false;	// 입장 후 오른쪽 이동 -> 멈춤 -> 위치 판정
@@ -69,6 +70,8 @@ ClientOptions ParseOptions(int argc, char* argv[])
 			options.useToken = true;
 			options.token = argv[++i];
 		}
+		else if (arg == "--character-id" && hasValue)
+			options.characterId = ::_atoi64(argv[++i]);
 		else if (arg == "--no-ping")
 			options.ping = false;
 		else if (arg == "--input-test")
@@ -127,15 +130,15 @@ int main(int argc, char* argv[])
 	// 입장 토큰 준비 (접속 전에 전부 끝냄 -> OnConnected에서는 읽기만 하므로 락 없음)
 	if (options.useToken)
 	{
-		GAccessTokens.assign(options.count, options.token);
-		Log("[Client] Using the given token for all " + to_string(options.count) + " client(s)");
+		GLogins.assign(options.count, LoginInfo{ options.token, options.characterId });
+		Log("[Client] Using the given token for all " + to_string(options.count) + " client(s), character " + to_string(options.characterId));
 	}
 	else
 	{
-		GAccessTokens = LoginAll(options.authHost, options.authPort, options.accountPrefix, options.count);
-		for (const string& token : GAccessTokens)
+		GLogins = LoginAll(options.authHost, options.authPort, options.accountPrefix, options.count);
+		for (const LoginInfo& login : GLogins)
 		{
-			if (token.empty())
+			if (login.token.empty())
 			{
 				Log("[Client] Login failed (is OutGameServer running on port " + to_string(options.authPort) + "?)");
 				return -1;

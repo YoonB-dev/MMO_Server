@@ -51,7 +51,8 @@ bool Handle_C_ENTER_GAME(PacketSessionRef& session, Protocol::C_ENTER_GAME& pkt)
 	}
 
 	// 캐릭터 불러오기는 DB 큐에서 (IOCP 스레드도 Room 줄도 DB를 기다리지 않게)
-	GDBQueue->DoAsync(&DBQueue::LoadCharacter, gameSession, auth.accountId);
+	//   내 계정 캐릭터인지는 DB가 account_id까지 같이 보고 판단
+	GDBQueue->DoAsync(&DBQueue::LoadCharacter, gameSession, auth.accountId, pkt.character_id());
 	return true;
 }
 

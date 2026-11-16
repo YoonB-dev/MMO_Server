@@ -10,12 +10,12 @@
 shared_ptr<DBQueue> GDBQueue;
 
 // 흐름 (같은 계정 기준, 전부 이 줄에서 순서대로)
-//   입장   LoadCharacter  -> SELECT / INSERT -> SetPlayer -> _online에 추가 -> Room::Enter
+//   입장   LoadCharacter  -> SELECT (고른 캐릭터 + 내 계정) -> SetPlayer -> _online에 추가 -> Room::Enter
 //   나감   Room::Leave    -> LeaveCharacter  -> UPDATE -> _online에서 뺌 -> (_waiting에 있으면) LoadCharacter
 //   중복   LoadCharacter  -> _online에 있음  -> 옛 세션 Disconnect, 새 세션은 _waiting -> 옛 세션의 LeaveCharacter가 이어 줌
 //   주기   Room::SaveAllPlayers -> SaveCharacters -> UPDATE 여러 줄
 
-void DBQueue::LoadCharacter(GameSessionRef session, int64 accountId)
+void DBQueue::LoadCharacter(GameSessionRef session, int64 accountId, int64 characterId)
 {
 	// 줄에서 기다리는 사이 이미 끊겼으면 DB도 안 부름
 	if (session->IsConnected() == false)
@@ -33,37 +33,34 @@ void DBQueue::LoadCharacter(GameSessionRef session, int64 accountId)
 		auto waiting = _waiting.find(accountId);
 		if (waiting != _waiting.end())
 		{
-			if (GameSessionRef prev = waiting->second.lock())
+			if (GameSessionRef prev = waiting->second.session.lock())
 				prev->Disconnect(L"Duplicate login");
 		}
 
-		_waiting[accountId] = session;
+		_waiting[accountId] = WaitingLogin{ session, characterId };
 		LogLine() << "[Login] duplicate login: account " << accountId << ", kicking old session";
 		return;
 	}
 
 	CharacterData data;
+	bool found = false;
 	bool ok = false;
 	{
 		DBConnectionGuard db(GDBConnectionPool);	// 블록이 끝나면 연결 반납
-		bool found = false;
-		if (db && SelectCharacter(db, accountId, data, found))
-		{
-			if (found)
-				ok = true;
-			else
-			{
-				// 처음 들어온 계정 -> 기본값(시작 위치, HP/MP 가득)으로 만듦
-				data = Player::NewCharacter(accountId);
-				ok = InsertCharacter(db, data);
-			}
-		}
+		ok = db && SelectCharacter(db, accountId, characterId, data, found);
 	}
 
 	if (ok == false)
 	{
 		LogLine() << "[DB] failed to load character: account " << accountId;	// 이유는 바로 위 [ODBC Error]
 		session->FailEnter(Protocol::ENTER_GAME_ERROR_SERVER_ERROR);
+		return;
+	}
+	if (found == false)
+	{
+		// 없는 번호이거나 남의 캐릭터 (DB가 account_id까지 같이 걸러서 둘이 같은 결과)
+		LogLine() << "[DB] no such character for account " << accountId << ": character " << characterId;
+		session->FailEnter(Protocol::ENTER_GAME_ERROR_INVALID_CHARACTER);
 		return;
 	}
 
@@ -74,7 +71,7 @@ void DBQueue::LoadCharacter(GameSessionRef session, int64 accountId)
 	// SetPlayer 성공 = 이 세션이 끊기면 반드시 Room::Leave -> LeaveCharacter가 와서 목록에서 빠짐
 	_online[accountId] = session;
 
-	LogLine() << "[DB] loaded character: account " << accountId;
+	LogLine() << "[DB] loaded character: account " << accountId << ", character " << characterId;	// 닉네임은 안 찍음 (콘솔 한글)
 	GRoom->DoAsync(&Room::Enter, player);	// 입장 처리는 Room 줄에서 (세션이 아직 연결돼 있는지 한 번 더 봄)
 }
 
@@ -94,10 +91,11 @@ void DBQueue::LeaveCharacter(CharacterData data)
 	auto waiting = _waiting.find(data.accountId);
 	if (waiting != _waiting.end())
 	{
-		GameSessionRef next = waiting->second.lock();
+		GameSessionRef next = waiting->second.session.lock();
+		const int64 nextCharacterId = waiting->second.characterId;	// erase 전에 꺼내 둠 (지운 뒤에는 waiting을 못 씀)
 		_waiting.erase(waiting);
 		if (next != nullptr)
-			LoadCharacter(next, data.accountId);	// 기다리는 사이 끊겼으면 첫 줄 IsConnected에서 끝남
+			LoadCharacter(next, data.accountId, nextCharacterId);	// 기다리는 사이 끊겼으면 첫 줄 IsConnected에서 끝남
 	}
 }
 
@@ -119,16 +117,20 @@ void DBQueue::SaveCharacters(xvector<CharacterData> rows)
 	LogLine() << "[DB] saved " << saved << " character(s)";
 }
 
-bool DBQueue::SelectCharacter(DBConnection& db, int64 accountId, CharacterData& out, bool& found)
+bool DBQueue::SelectCharacter(DBConnection& db, int64 accountId, int64 characterId, CharacterData& out, bool& found)
 {
 	out.accountId = accountId;
+	out.characterId = characterId;
 
-	DBBind<1, 4> query(db, L"SELECT pos_x, pos_z, hp, mp FROM player_character WHERE account_id = ?");
-	query.BindParam(0, accountId);
-	query.BindCol(0, out.x);
-	query.BindCol(1, out.z);
-	query.BindCol(2, out.hp);
-	query.BindCol(3, out.mp);
+	// account_id도 같이 봄 -> 토큰의 계정 캐릭터가 아니면 줄이 안 나옴 (남의 캐릭터로 입장 불가)
+	DBBind<2, 5> query(db, L"SELECT nickname, pos_x, pos_z, hp, mp FROM player_character WHERE character_id = ? AND account_id = ?");
+	query.BindParam(0, characterId);
+	query.BindParam(1, accountId);
+	query.BindCol(0, out.nickname);		// WCHAR[21] 배열 -> 템플릿이 크기(21)까지 같이 넘김
+	query.BindCol(1, out.x);
+	query.BindCol(2, out.z);
+	query.BindCol(3, out.hp);
+	query.BindCol(4, out.mp);
 
 	if (query.Execute() == false)
 		return false;
@@ -137,28 +139,15 @@ bool DBQueue::SelectCharacter(DBConnection& db, int64 accountId, CharacterData& 
 	return true;
 }
 
-bool DBQueue::InsertCharacter(DBConnection& db, const CharacterData& data)
+bool DBQueue::UpdateCharacter(DBConnection& db, const CharacterData& data)
 {
 	CharacterData row = data;	// BindParam은 값을 바꿀 수 있는 변수의 주소를 받아서 복사본으로
 
-	DBBind<5, 0> query(db, L"INSERT INTO player_character (account_id, pos_x, pos_z, hp, mp) VALUES (?, ?, ?, ?, ?)");
-	query.BindParam(0, row.accountId);
-	query.BindParam(1, row.x);
-	query.BindParam(2, row.z);
-	query.BindParam(3, row.hp);
-	query.BindParam(4, row.mp);
-	return query.Execute();
-}
-
-bool DBQueue::UpdateCharacter(DBConnection& db, const CharacterData& data)
-{
-	CharacterData row = data;	// InsertCharacter와 같은 이유로 복사본
-
-	DBBind<5, 0> query(db, L"UPDATE player_character SET pos_x = ?, pos_z = ?, hp = ?, mp = ?, updated_at = UTC_TIMESTAMP() WHERE account_id = ?");
+	DBBind<5, 0> query(db, L"UPDATE player_character SET pos_x = ?, pos_z = ?, hp = ?, mp = ?, updated_at = UTC_TIMESTAMP() WHERE character_id = ?");
 	query.BindParam(0, row.x);
 	query.BindParam(1, row.z);
 	query.BindParam(2, row.hp);
 	query.BindParam(3, row.mp);
-	query.BindParam(4, row.accountId);
+	query.BindParam(4, row.characterId);
 	return query.Execute();
 }

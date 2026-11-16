@@ -25,4 +25,5 @@ enum EnterGameError
 	ENTER_GAME_ERROR_TOKEN_EXPIRED = 2;		// exp 지남 -> 클라는 아웃게임 서버 /auth/refresh 후 다시 시도
 	ENTER_GAME_ERROR_ALREADY_ENTERED = 3;	// 이미 입장했거나 입장 처리 중
 	ENTER_GAME_ERROR_SERVER_ERROR = 4;		// DB 실패 등
+	ENTER_GAME_ERROR_INVALID_CHARACTER = 5;	// 없는 캐릭터이거나 내 계정 캐릭터가 아님 (둘을 구분하지 않음: 남의 캐릭터가 있는지 알려 주지 않음)
 }

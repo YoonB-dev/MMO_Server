@@ -164,9 +164,10 @@ bool Handle_S_ENTER_GAME(PacketSessionRef& session, Protocol::S_ENTER_GAME& pkt)
 	{
 		const Protocol::PosInfo& pos = pkt.player().move_info().pos_info();
 		line << " pos=(" << pos.x() << ", " << pos.z() << ") hp=" << pkt.player().stat_info().hp();	// 저장된 캐릭터를 불러왔는지 확인용
+		line << " name=" << pkt.player().name();	// 테스트 닉네임은 영문/숫자라 콘솔에 그대로 찍힘
 	}
 	if (pkt.success() == false)
-		line << " error=" << pkt.error();	// Enum.proto EnterGameError (1 토큰 오류, 2 만료, 3 중복 요청, 4 서버 오류)
+		line << " error=" << pkt.error();	// Enum.proto EnterGameError (1 토큰 오류, 2 만료, 3 중복 요청, 4 서버 오류, 5 캐릭터 없음/남의 것)
 	Log(ClientIdOf(session), line.str());
 
 	if (pkt.success() == false)

@@ -53,6 +53,7 @@ message ObjectInfo
 	MoveInfo move_info = 3;
 	StatInfo stat_info = 4;		// HP바 표시용. S_ENTER_GAME, S_SPAWN에 자동으로 같이 실림
 	CastInfo cast_info = 5;		// 시전 중일 때만 있음 (몬스터 예고 공격). S_SPAWN에 자동으로 같이 실림
+	string name = 6;			// 플레이어 닉네임 (UTF-8, 한글 가능). 몬스터는 비어 있음
 }
 
 // S_MOVE 안의 한 명분

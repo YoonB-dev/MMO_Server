@@ -14,7 +14,7 @@ bool GDodgeTest = false;
 bool GDeathTest = false;
 bool GBot = false;
 float GBotArea = 100.f;
-std::vector<string> GAccessTokens;
+std::vector<LoginInfo> GLogins;
 
 int64 NowUs()
 {
@@ -45,10 +45,13 @@ void ServerSession::OnConnected()
 {
 	Log(_clientId, "Connected to server");
 
-	// 접속하자마자 게임 입장 요청 (main에서 로그인해 둔 내 번호의 토큰을 같이 보냄)
+	// 접속하자마자 게임 입장 요청 (main에서 로그인해 둔 내 번호의 토큰 + 로비에서 고른 캐릭터를 같이 보냄)
 	Protocol::C_ENTER_GAME enterPkt;
-	if (_clientId - 1 < static_cast<int32>(GAccessTokens.size()))
-		enterPkt.set_access_token(GAccessTokens[_clientId - 1]);
+	if (_clientId - 1 < static_cast<int32>(GLogins.size()))
+	{
+		enterPkt.set_access_token(GLogins[_clientId - 1].token);
+		enterPkt.set_character_id(GLogins[_clientId - 1].characterId);
+	}
 	Send(ServerPacketHandler::MakeSendBuffer(enterPkt));
 }
 
