@@ -160,20 +160,31 @@ function Start-OutGameServer
     throw "OutGameServer did not start within $TimeoutSec s"
 }
 
-# 아웃게임 서버 API 호출 (POST JSON). 4xx/5xx도 예외 없이 @{ Status; Body } 로 돌려줌
+# 아웃게임 서버 API 호출 (POST JSON 또는 GET). 4xx/5xx도 예외 없이 @{ Status; Body } 로 돌려줌
 #   주소는 OutGameServer/appsettings.json의 Kestrel 주소
+#   -Token: Authorization: Bearer 헤더로 보냄 (로비 API /characters)
 function Invoke-AuthApi
 {
-    param([string]$Path, [hashtable]$Body)
+    param([string]$Path, [hashtable]$Body, [ValidateSet('Get', 'Post')][string]$Method = 'Post', [string]$Token)
 
     # PowerShell 5.1 기본값에는 TLS 1.2가 빠져 있을 수 있음 (Kestrel은 TLS 1.2 이상)
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
     $uri = "https://localhost:7100$Path"
-    $json = $Body | ConvertTo-Json -Compress
+    $headers = @{}
+    if ($Token) { $headers['Authorization'] = "Bearer $Token" }
     try
     {
-        $response = Invoke-WebRequest -Uri $uri -Method Post -ContentType 'application/json' -Body $json -UseBasicParsing
+        if ($Method -eq 'Get')
+        {
+            $response = Invoke-WebRequest -Uri $uri -Method Get -Headers $headers -UseBasicParsing
+        }
+        else
+        {
+            # 본문은 UTF-8 바이트로 (PS 5.1은 문자열 본문의 한글을 깨뜨릴 수 있음)
+            $json = [Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Compress))
+            $response = Invoke-WebRequest -Uri $uri -Method Post -ContentType 'application/json; charset=utf-8' -Headers $headers -Body $json -UseBasicParsing
+        }
         $content = if ($response.Content) { $response.Content | ConvertFrom-Json } else { $null }
         return @{ Status = [int]$response.StatusCode; Body = $content }
     }
