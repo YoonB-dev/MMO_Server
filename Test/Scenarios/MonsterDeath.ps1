@@ -9,7 +9,7 @@ Start-DummyClients -Name A -Count 4 -Arguments '--attack-test'
 Wait-LogCount -Name server -Pattern 'killed by' -Expected 1 -TimeoutSec 30
 Wait-LogCount -Name A -Pattern 'S_DIE ' -Expected 4
 Wait-LogCount -Name server -Pattern '\[Room\] spawn monster' -Expected 4 -TimeoutSec 15	# 처음 3 + 리스폰 1
-Wait-LogCount -Name A -Pattern 'S_SPAWN ids: \d+\(monster hp=200\)\s*$' -Expected 4
+Wait-LogCount -Name A -Pattern 'S_SPAWN ids: \d+\(monster hp=200 lv=3\)\s*$' -Expected 4
 
 Assert-LogCount -Name server -Pattern 'killed by' -Expected 1
 Assert-LogContains -Name A -Pattern 'S_CHANGE_HP .* hp=0 '

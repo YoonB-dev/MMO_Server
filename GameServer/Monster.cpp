@@ -36,6 +36,7 @@ Monster::Monster(const MonsterData& data, const MonsterSpawnData& spawn)
 	GetPosInfo()->set_z(spawn.z);
 	GetStatInfo()->set_hp(_data.maxHp);		// DB(data_monster.max_hp)
 	GetStatInfo()->set_max_hp(_data.maxHp);
+	GetStatInfo()->set_level(_data.level);		// 이름표 레벨 (data_monster.level, 표시용)
 }
 
 void Monster::Update(Room& room, float dt)

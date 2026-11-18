@@ -94,6 +94,11 @@ bool Handle_S_PING(PacketSessionRef& session, Protocol::S_PING& pkt)
 
 	if (GAttackTest)
 		TryAutoAttack(session);
+	if (GPickupTest)	// 주울 게 없으면 서버가 무시 (응답 없음)
+	{
+		Protocol::C_PICKUP pickupPkt;	// MakeSendBuffer가 non-const 참조를 받아서 임시 객체 대신 변수로
+		session->Send(ServerPacketHandler::MakeSendBuffer(pickupPkt));
+	}
 	return true;
 }
 
@@ -198,6 +203,10 @@ bool Handle_S_ENTER_GAME(PacketSessionRef& session, Protocol::S_ENTER_GAME& pkt)
 		const Protocol::PosInfo& pos = pkt.player().move_info().pos_info();
 		line << " pos=(" << pos.x() << ", " << pos.z() << ") hp=" << pkt.player().stat_info().hp();	// 저장된 캐릭터를 불러왔는지 확인용
 		line << " name=" << pkt.player().name() << " name_hex=" << HexOf(pkt.player().name());	// 한글 이름은 name_hex로 비교
+		line << " level=" << pkt.player().stat_info().level() << " exp=" << pkt.exp() << " next=" << pkt.exp_to_next();	// 저장된 레벨 / 경험치 확인용
+		line << " gold=" << pkt.gold() << " items=";	// 저장된 골드 / 인벤토리 확인용 (순서는 서버 map 순서라 일정하지 않음)
+		for (int32 i = 0; i < pkt.inventory_size(); i++)
+			line << (i > 0 ? "," : "") << pkt.inventory(i).item_id() << "x" << pkt.inventory(i).count();
 	}
 	if (pkt.success() == false)
 		line << " error=" << pkt.error();	// Enum.proto EnterGameError (1 토큰 오류, 2 만료, 3 중복 요청, 4 서버 오류, 5 캐릭터 없음/남의 것)
@@ -392,8 +401,15 @@ bool Handle_S_SPAWN(PacketSessionRef& session, Protocol::S_SPAWN& pkt)
 		line << " " << object.object_id();
 		if (object.object_type() == Protocol::OBJECT_TYPE_MONSTER)
 		{
-			line << "(monster hp=" << object.stat_info().hp() << ")";	// stat_info가 실려 오는지 확인용
+			line << "(monster hp=" << object.stat_info().hp() << " lv=" << object.stat_info().level() << ")";	// stat_info가 실려 오는지 확인용
 			me->monsterIds.insert(object.object_id());
+		}
+		else if (object.object_type() == Protocol::OBJECT_TYPE_DROP)	// 바닥 드랍: item_id 0 = 골드
+		{
+			if (object.drop_info().item_id() == 0)
+				line << "(drop gold=" << object.drop_info().amount() << ")";
+			else
+				line << "(drop item=" << object.drop_info().item_id() << " x" << object.drop_info().amount() << ")";
 		}
 		if (object.has_cast_info())	// 시전 도중에 보이게 된 객체 (예고 게이지가 이미 일부 찬 상태)
 			line << "(casting skill=" << object.cast_info().skill_id()
@@ -626,5 +642,49 @@ bool Handle_S_CHAT(PacketSessionRef& session, Protocol::S_CHAT& pkt)
 		me->chatReplied = true;
 		SendChat(session, Protocol::CHAT_CHANNEL_ROOM, "reply");
 	}
+	return true;
+}
+
+// 경험치 (처치자 본인만): 테스트는 처치자 한 명에게만 오는지와 레벨업 후 넘친 양을 봄
+bool Handle_S_CHANGE_EXP(PacketSessionRef& session, Protocol::S_CHANGE_EXP& pkt)
+{
+	ostringstream line;
+	line << "S_CHANGE_EXP level=" << pkt.level() << " exp=" << pkt.exp() << " next=" << pkt.exp_to_next() << " gained=" << pkt.gained();
+	Log(ClientIdOf(session), line.str());
+	return true;
+}
+
+// 레벨업 (그 플레이어가 보이는 사람 모두, 본인 포함)
+bool Handle_S_LEVEL_UP(PacketSessionRef& session, Protocol::S_LEVEL_UP& pkt)
+{
+	ostringstream line;
+	line << "S_LEVEL_UP id=" << pkt.object_id() << " level=" << pkt.level();
+	Log(ClientIdOf(session), line.str());
+	return true;
+}
+
+// 줍기 (그 드랍을 보던 사람 모두): 테스트는 드랍마다 정확히 한 명만 주웠는지 봄
+bool Handle_S_PICKUP(PacketSessionRef& session, Protocol::S_PICKUP& pkt)
+{
+	ostringstream line;
+	line << "S_PICKUP drop=" << pkt.drop_id() << " picker=" << pkt.picker_id();
+	Log(ClientIdOf(session), line.str());
+	return true;
+}
+
+// 골드 / 아이템 (주운 사람 본인만)
+bool Handle_S_CHANGE_GOLD(PacketSessionRef& session, Protocol::S_CHANGE_GOLD& pkt)
+{
+	ostringstream line;
+	line << "S_CHANGE_GOLD gold=" << pkt.gold() << " gained=" << pkt.gained();
+	Log(ClientIdOf(session), line.str());
+	return true;
+}
+
+bool Handle_S_CHANGE_ITEM(PacketSessionRef& session, Protocol::S_CHANGE_ITEM& pkt)
+{
+	ostringstream line;
+	line << "S_CHANGE_ITEM item=" << pkt.item_id() << " count=" << pkt.count() << " gained=" << pkt.gained();
+	Log(ClientIdOf(session), line.str());
 	return true;
 }

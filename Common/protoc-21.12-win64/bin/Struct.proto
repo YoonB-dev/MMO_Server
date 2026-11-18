@@ -31,6 +31,7 @@ message StatInfo
 {
 	int32 hp = 1;
 	int32 max_hp = 2;
+	int32 level = 3;	// 이름표 "Lv.N". 플레이어는 캐릭터 레벨, 몬스터는 data_monster.level
 }
 
 // 진행 중인 시전 (몬스터 예고 공격). 시전 중이 아니면 ObjectInfo에 없음 (has_cast_info() == false)
@@ -45,7 +46,21 @@ message CastInfo
 	float hit_angle = 6;	// 부채꼴 좌우 반각 (도)
 }
 
-// 월드에 존재하는 객체 하나 (플레이어, 몬스터 공통)
+// 인벤토리 한 칸 = 아이템 종류 하나와 개수
+message ItemCount
+{
+	int32 item_id = 1;
+	int32 count = 2;
+}
+
+// 바닥에 떨어진 것 (ObjectInfo.object_type = DROP일 때만 있음)
+message DropInfo
+{
+	int32 item_id = 1;	// 0 = 골드, 그 외 = data_item.item_id (클라가 아이콘으로 그림)
+	int32 amount = 2;	// 골드 양 또는 아이템 개수
+}
+
+// 월드에 존재하는 객체 하나 (플레이어, 몬스터, 드랍 공통)
 message ObjectInfo
 {
 	uint64 object_id = 1;
@@ -54,6 +69,7 @@ message ObjectInfo
 	StatInfo stat_info = 4;		// HP바 표시용. S_ENTER_GAME, S_SPAWN에 자동으로 같이 실림
 	CastInfo cast_info = 5;		// 시전 중일 때만 있음 (몬스터 예고 공격). S_SPAWN에 자동으로 같이 실림
 	string name = 6;			// 플레이어 닉네임 (UTF-8, 한글 가능). 몬스터는 비어 있음
+	DropInfo drop_info = 7;		// 드랍일 때만 있음
 }
 
 // S_MOVE 안의 한 명분

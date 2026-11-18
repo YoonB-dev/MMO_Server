@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-// 월드를 정사각형 칸(셀)으로 나눠서, 칸마다 그 안에 있는 플레이어 / 몬스터를 들고 있음
+// 월드를 정사각형 칸(셀)으로 나눠서, 칸마다 그 안에 있는 플레이어 / 몬스터 / 바닥 드랍을 들고 있음
 //   "(x, z)에서 range 안에 있을 수 있는 객체"를 찾을 때 월드 전체가 아니라 그 범위에 걸친 칸만 봄
 //   칸은 후보를 좁히는 용도이고, 정확한 거리 판정은 부르는 쪽(Room)이 함
 //   Room의 멤버라서 Room JobQueue 안에서만 쓰임 -> 락 없음
@@ -11,6 +11,7 @@ struct GridCell
 {
 	xvector<PlayerRef>	players;
 	xvector<MonsterRef>	monsters;
+	xvector<DropRef>	drops;		// 바닥 드랍 (움직이지 않아서 Update 없음)
 };
 
 class Grid
@@ -23,6 +24,8 @@ public:
 	void	Add(const MonsterRef& monster);
 	void	Remove(const PlayerRef& player);
 	void	Remove(const MonsterRef& monster);
+	void	Add(const DropRef& drop);
+	void	Remove(const DropRef& drop);
 
 	// 위치가 바뀐 뒤 호출: 칸이 바뀌었으면 옛 칸에서 빼고 새 칸에 넣음 (대부분은 같은 칸이라 비교만 하고 끝)
 	void	Update(const PlayerRef& player);
@@ -49,6 +52,16 @@ public:
 			for (int32 col = r.minCol; col <= r.maxCol; col++)
 				for (const MonsterRef& monster : _cells[row * _cellsPerSide + col].monsters)
 					func(monster);
+	}
+
+	template<typename Func>
+	void ForEachDrop(float x, float z, float range, Func&& func)
+	{
+		CellRange r = GetCellRange(x, z, range);
+		for (int32 row = r.minRow; row <= r.maxRow; row++)
+			for (int32 col = r.minCol; col <= r.maxCol; col++)
+				for (const DropRef& drop : _cells[row * _cellsPerSide + col].drops)
+					func(drop);
 	}
 
 private:

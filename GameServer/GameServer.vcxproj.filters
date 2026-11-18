@@ -95,6 +95,9 @@
     <ClInclude Include="Grid.h">
       <Filter>Game</Filter>
     </ClInclude>
+    <ClInclude Include="Drop.h">
+      <Filter>Game</Filter>
+    </ClInclude>
     <ClInclude Include="GameSessionManager.h">
       <Filter>Session</Filter>
     </ClInclude>

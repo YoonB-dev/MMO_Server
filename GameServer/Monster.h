@@ -35,6 +35,7 @@ public:
 	// Room이 쓰는 조회
 	bool					IsInvulnerable() const { return _state == MonsterState::Return; }	// 돌아가는 중에는 무적
 	const MonsterSpawnData&	GetSpawn() const { return _spawn; }	// 죽었을 때 같은 스폰 줄로 리스폰 예약
+	const MonsterData&		GetData() const { return _data; }	// 종류별 수치 (처치 보상 등). 원본을 읽기 전용으로 빌려 줌
 
 	// Room이 알려 주는 이벤트
 	void	OnDamaged(uint64 attackerId);	// 맞았을 때 (살아 있을 때만, Room::HandleSkill에서)

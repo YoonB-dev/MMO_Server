@@ -160,6 +160,31 @@ uint64 ParseSaveIntervalSec(int argc, char* argv[])
 	return seconds;
 }
 
+// GameServer.exe [--drop-lifetime-sec N]  (바닥 드랍 수명, 기본 60초. 테스트에서 만료를 기다리지 않으려고 짧게 줌)
+uint64 ParseDropLifetimeSec(int argc, char* argv[])
+{
+	uint64 seconds = 60;
+	for (int32 i = 1; i + 1 < argc; i++)
+	{
+		if (string(argv[i]) == "--drop-lifetime-sec")
+			seconds = static_cast<uint64>(::atoi(argv[i + 1]));
+	}
+	return seconds;
+}
+
+// GameServer.exe [--max-drops N]  (바닥 드랍 상한, 기본 500. 테스트에서 작게 줘서 오래된 것부터 지우는지 확인)
+//   안 주면 0 -> Room이 기본값을 그대로 둠 (기본값은 Room 안에만 있게)
+int32 ParseMaxDrops(int argc, char* argv[])
+{
+	int32 count = 0;
+	for (int32 i = 1; i + 1 < argc; i++)
+	{
+		if (string(argv[i]) == "--max-drops")
+			count = ::atoi(argv[i + 1]);
+	}
+	return count;
+}
+
 // GameServer.exe [--load-monsters N] [--load-area M]  (부하 테스트용 몬스터 N마리를 ±M m에 추가. 기본 0마리, 100m)
 void ApplyLoadMonsterOptions(int argc, char* argv[])
 {
@@ -206,6 +231,8 @@ int main(int argc, char* argv[])
 	GRoom = MakeShared<Room>();
 	GRoom->SetMonsterSendPolicy(monsterSendPolicy);
 	GRoom->SetSaveInterval(ParseSaveIntervalSec(argc, argv));
+	GRoom->SetDropLifetime(ParseDropLifetimeSec(argc, argv));
+	GRoom->SetMaxDrops(ParseMaxDrops(argc, argv));
 	ApplyLoadMonsterOptions(argc, argv);
 	GRoom->Start();
 
