@@ -7,6 +7,7 @@
 #include "MoveSendPolicy.h"
 #include "GameData.h"
 #include "DBQueue.h"
+#include "Drop.h"
 #include <cmath>
 #include <algorithm>
 #include <chrono>
@@ -126,6 +127,7 @@ void Room::Tick()
 	{
 		ResetInputCounts();
 		UpdatePlayerStats();
+		ExpireDrops();
 	}
 
 	if (_tick % _saveIntervalTicks == 0)
@@ -181,7 +183,7 @@ void Room::LogStats(uint64 now)
 		for (auto& [id, player] : _players)
 			visibleSum += player->visible.size();
 		LogLine() << "[Room] view: avg " << (static_cast<double>(visibleSum) / _players.size()) << " objects per player"
-			<< " (enter " << VIEW_ENTER_RADIUS << "m, leave " << VIEW_LEAVE_RADIUS << "m)";
+			<< " (enter " << VIEW_ENTER_RADIUS << "m, leave " << VIEW_LEAVE_RADIUS << "m), drops on ground " << _drops.size();
 	}
 
 	// 스킬 거절 / 빗나감: 이 구간에 하나라도 있었을 때만 출력
@@ -285,6 +287,15 @@ void Room::EnterView(const PlayerRef& player)
 			*aroundPkt.add_objects() = monster->GetObjectInfo();
 		});
 
+	_grid.ForEachDrop(x, z, VIEW_ENTER_RADIUS, [&](const DropRef& drop)
+		{
+			if (DistSq(*drop, x, z) > enterSq)
+				return;
+
+			player->visible.emplace(drop->GetObjectId(), _tick);
+			*aroundPkt.add_objects() = drop->GetObjectInfo();
+		});
+
 	if (aroundPkt.objects_size() > 0)
 		SendSpawns(player, aroundPkt);
 }
@@ -346,6 +357,7 @@ void Room::UpdateView(const PlayerRef& player, const Protocol::S_MOVE& tickMoves
 
 	_grid.ForEachPlayer(x, z, VIEW_LEAVE_RADIUS, [&](const PlayerRef& other) { check(*other); });
 	_grid.ForEachMonster(x, z, VIEW_LEAVE_RADIUS, [&](const MonsterRef& monster) { check(*monster); });
+	_grid.ForEachDrop(x, z, VIEW_LEAVE_RADIUS, [&](const DropRef& drop) { check(*drop); });	// 안 움직여서 S_MOVE에는 안 들어감
 
 	// 3. 이번 틱에 확인 못 한 것 = 멀어졌거나, 다른 칸으로 멀리 갔거나(부활 순간이동)
 	//    erase(it)는 지운 다음 원소를 돌려줌 -> 지우면서 도는 동안 it를 그걸로 바꿔야 함 (지운 반복자는 못 씀)
@@ -428,6 +440,11 @@ void Room::Leave(PlayerRef player)
 void Room::SetSaveInterval(uint64 seconds)
 {
 	_saveIntervalTicks = (seconds > 0 ? seconds : 1) * TICKS_PER_SECOND;	// 0이면 % 0이 돼서 최소 1초
+}
+
+void Room::SetDropLifetime(uint64 seconds)
+{
+	_dropLifetimeTicks = (seconds > 0 ? seconds : 1) * TICKS_PER_SECOND;
 }
 
 void Room::SetLoadMonsters(int32 count, float area)
@@ -899,8 +916,9 @@ void Room::KillMonster(MonsterRef monster, uint64 killerId)
 	_grid.Remove(monster);
 	_monsters.erase(monsterId);	// 이제 공격 대상, 틱, 시야 어디에도 안 나옴
 
-	// 처치 보상: 경험치는 마지막 공격자에게
+	// 처치 보상: 경험치는 마지막 공격자에게, 골드 / 아이템은 바닥에 (먼저 줍는 사람이 가져감)
 	GiveExp(killerId, monster->GetData().expReward);
+	SpawnDrops(*monster);
 
 	const MonsterSpawnData& spawn = monster->GetSpawn();
 	LogLine() << "[Room] monster " << monsterId << " killed by " << killerId
@@ -934,6 +952,86 @@ void Room::GiveExp(uint64 killerId, int32 amount)
 		upPkt.set_level(killer->GetLevel());
 		BroadcastToViewers(*killer, ClientPacketHandler::MakeSendBuffer(upPkt));	// 처치자 본인 포함
 	}
+}
+
+// 몬스터가 죽은 자리에 골드 한 더미 + 드랍표 줄마다 확률을 굴린 아이템
+//   보이는 건 다음 틱 UpdateView가 처리 (SpawnMonster와 같은 방식)
+void Room::SpawnDrops(Monster& monster)
+{
+	const MonsterData& data = monster.GetData();
+	const float x = monster.GetPosInfo()->x();
+	const float z = monster.GetPosInfo()->z();
+	int32 count = 0;
+	int32 gold = 0;
+
+	if (data.goldMax > 0)
+	{
+		gold = std::uniform_int_distribution<int32>(data.goldMin, data.goldMax)(_rng);
+		if (gold > 0)
+		{
+			AddDrop(0, gold, x, z);
+			count++;
+		}
+	}
+	for (const MonsterDropData& drop : data.drops)
+	{
+		if (std::uniform_int_distribution<int32>(1, 1000)(_rng) > drop.chancePermille)
+			continue;	// 1~1000 중 chance 이하가 나오면 떨어짐 (500 = 50%)
+		const int32 amount = std::uniform_int_distribution<int32>(drop.minCount, drop.maxCount)(_rng);
+		AddDrop(drop.itemId, amount, x, z);
+		count++;
+	}
+
+	if (count > 0)
+		LogLine() << "[Room] monster " << monster.GetObjectId() << " dropped " << count << " (gold " << gold << ")";
+}
+
+// 하나 만들기: 상한이면 가장 오래된 것부터 지움 -> 자리를 흩뿌림 -> 목록과 Grid에 추가
+void Room::AddDrop(int32 itemId, int32 amount, float x, float z)
+{
+	if (static_cast<int32>(_drops.size()) >= MAX_DROPS)
+		RemoveDrop(_drops.begin()->second);
+
+	// 원 안에 고르게: 각도는 그대로, 반지름은 sqrt를 씌움 (안 씌우면 가운데로 몰림)
+	std::uniform_real_distribution<float> unit(0.f, 1.f);
+	const float angle = unit(_rng) * 6.2831853f;
+	const float radius = std::sqrt(unit(_rng)) * DROP_SCATTER_RADIUS;
+
+	DropRef drop = MakeShared<Drop>(itemId, amount, x + std::sin(angle) * radius, z + std::cos(angle) * radius, _tick + _dropLifetimeTicks);
+	_drops[drop->GetObjectId()] = drop;
+	_grid.Add(drop);
+}
+
+// 바닥에서 없애기: 보던 사람에게 S_DESPAWN + 각자 visible에서 지움 (KillMonster의 S_DIE와 같은 순서)
+//   drop을 값(shared_ptr 복사)으로 받음: _drops.begin()->second를 참조로 받으면 아래 erase가 그 원본을 지워서
+//   함수 나머지에서 사라진 객체를 쓰게 됨. 복사본이 함수 끝까지 객체를 붙잡고 있음
+void Room::RemoveDrop(DropRef drop)
+{
+	const uint64 id = drop->GetObjectId();
+	Protocol::S_DESPAWN pkt;
+	pkt.add_object_ids(id);
+	SendBufferRef sendBuffer = ClientPacketHandler::MakeSendBuffer(pkt);
+	ForEachViewer(*drop, [&](const PlayerRef& viewer)
+		{
+			viewer->visible.erase(id);
+			SendTo(viewer, sendBuffer);
+		});
+	_grid.Remove(drop);	// ForEachViewer가 끝난 뒤에 (도는 중에 칸 목록을 바꾸면 안 됨)
+	_drops.erase(id);
+}
+
+// 1초마다 (Tick): 수명이 모두 같아서 만료된 드랍은 _drops 앞쪽(오래된 쪽)에 모여 있음
+//   -> 앞에서부터 지우다가 아직 안 된 게 나오면 멈춤 (전체를 돌지 않음)
+void Room::ExpireDrops()
+{
+	int32 expired = 0;
+	while (_drops.empty() == false && _drops.begin()->second->GetExpireTick() <= _tick)
+	{
+		RemoveDrop(_drops.begin()->second);
+		expired++;
+	}
+	if (expired > 0)
+		LogLine() << "[Room] drops expired: " << expired;
 }
 
 // 몬스터가 플레이어를 맞힘 (Monster::UpdateAttack). 몬스터 쪽 HandleSkill처럼 "데미지 + 죽음 처리"를 한 곳에서

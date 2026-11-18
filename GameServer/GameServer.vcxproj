@@ -119,6 +119,7 @@
     <ClInclude Include="GameData.h" />
     <ClInclude Include="Room.h" />
     <ClInclude Include="Grid.h" />
+    <ClInclude Include="Drop.h" />
     <ClInclude Include="ClientPacketHandler.h" />
     <ClInclude Include="MoveSendPolicy.h" />
     <ClInclude Include="JwtVerifier.h" />

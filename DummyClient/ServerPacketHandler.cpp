@@ -396,6 +396,13 @@ bool Handle_S_SPAWN(PacketSessionRef& session, Protocol::S_SPAWN& pkt)
 			line << "(monster hp=" << object.stat_info().hp() << " lv=" << object.stat_info().level() << ")";	// stat_info가 실려 오는지 확인용
 			me->monsterIds.insert(object.object_id());
 		}
+		else if (object.object_type() == Protocol::OBJECT_TYPE_DROP)	// 바닥 드랍: item_id 0 = 골드
+		{
+			if (object.drop_info().item_id() == 0)
+				line << "(drop gold=" << object.drop_info().amount() << ")";
+			else
+				line << "(drop item=" << object.drop_info().item_id() << " x" << object.drop_info().amount() << ")";
+		}
 		if (object.has_cast_info())	// 시전 도중에 보이게 된 객체 (예고 게이지가 이미 일부 찬 상태)
 			line << "(casting skill=" << object.cast_info().skill_id()
 				 << " " << object.cast_info().remaining_ms() << "/" << object.cast_info().total_ms() << "ms)";

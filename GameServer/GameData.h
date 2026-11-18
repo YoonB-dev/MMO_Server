@@ -7,6 +7,21 @@ struct SkillData;
 
 constexpr int32 MONSTER_SKILL_ID_BEGIN = 101;	// 이 번호부터는 몬스터 스킬 (플레이어 C_SKILL은 거절). skill.sql과 맞춤
 
+// data_item 한 줄. 이번에는 드랍표의 item_id가 진짜 있는지 확인하는 데만 씀
+struct ItemData
+{
+	int32	itemId = 0;
+};
+
+// data_monster_drop 한 줄: 몬스터가 죽을 때 이 아이템이 떨어질 확률과 개수
+struct MonsterDropData
+{
+	int32	itemId = 0;
+	int32	chancePermille = 0;		// 1000분율 (500 = 50%)
+	int32	minCount = 0;
+	int32	maxCount = 0;
+};
+
 // data_monster 한 줄: 몬스터 종류별 AI 수치 (거리 m, 속도 m/s, 시간 초)
 struct MonsterData
 {
@@ -26,6 +41,9 @@ struct MonsterData
 	int32	skillId = 0;				// 공격 스킬 (data_skill)
 	const SkillData*	skill = nullptr;	// 로드할 때 skillId로 찾아서 연결해 둠 (s_skills 원소, 주소가 안 바뀜)
 	int32	expReward = 0;		// 처치한 사람(마지막 공격자)이 받는 경험치 (data_monster.exp_reward)
+	int32	goldMin = 0;		// 바닥에 떨어지는 골드 범위 (둘 다 0이면 골드 없음)
+	int32	goldMax = 0;
+	vector<MonsterDropData>	drops;	// 이 몬스터의 드랍표 (LoadMonsterDrops가 채움)
 };
 
 // data_monster_spawn 한 줄: 어디에 어떤 몬스터가 나오나
@@ -55,5 +73,6 @@ bool							LoadGameData();						// main에서 DB 접속 후 한 번. 실패하�
 const MonsterData*				FindMonsterData(int32 monsterId);	// 없으면 nullptr
 const vector<MonsterSpawnData>&	GetMonsterSpawns();
 const SkillData*				FindSkillData(int32 skillId);		// 없으면 nullptr
+const ItemData*					FindItemData(int32 itemId);			// 없으면 nullptr
 int32							GetMaxLevel();						// data_level의 마지막 레벨
 int64							GetExpToNext(int32 level);			// 그 레벨에서 다음 레벨까지 필요한 경험치. 0 = 최대 레벨 (범위 밖도 0)

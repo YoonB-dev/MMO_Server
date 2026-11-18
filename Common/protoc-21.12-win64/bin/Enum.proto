@@ -8,6 +8,7 @@ enum ObjectType
 	OBJECT_TYPE_NONE = 0;
 	OBJECT_TYPE_PLAYER = 1;
 	OBJECT_TYPE_MONSTER = 2;
+	OBJECT_TYPE_DROP = 3;	// 바닥에 떨어진 골드 / 아이템 (움직이지 않음, 줍기 대상)
 }
 
 enum MoveState

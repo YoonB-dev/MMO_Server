@@ -10,15 +10,16 @@ static unordered_map<int32, MonsterData>	s_monsters;
 static vector<MonsterSpawnData>				s_spawns;
 static unordered_map<int32, SkillData>		s_skills;
 static vector<int64>						s_expToNext;	// [level - 1] = 그 레벨의 필요 경험치 (레벨은 1부터 빠짐없이라 배열 번호로 바로 찾음)
+static unordered_map<int32, ItemData>		s_items;
 
 static bool LoadMonsters(DBConnection& db)
 {
 	MonsterData row;	// BindCol로 각 필드의 주소를 알려 두면, Fetch할 때마다 이번 줄의 값이 여기에 채워짐
 
-	DBBind<0, 15> query(db,
+	DBBind<0, 17> query(db,
 		L"SELECT monster_id, patrol_range, patrol_speed, idle_min_sec, idle_max_sec,"
 		L" detect_range, stop_range, chase_speed, lose_range, leash_range, return_speed, max_hp, skill_id,"
-		L" level, exp_reward"
+		L" level, exp_reward, gold_min, gold_max"
 		L" FROM data_monster");
 	query.BindCol(0, row.monsterId);
 	query.BindCol(1, row.patrolRange);
@@ -35,6 +36,8 @@ static bool LoadMonsters(DBConnection& db)
 	query.BindCol(12, row.skillId);
 	query.BindCol(13, row.level);
 	query.BindCol(14, row.expReward);
+	query.BindCol(15, row.goldMin);
+	query.BindCol(16, row.goldMax);
 
 	if (query.Execute() == false)
 		return false;	// 이유는 바로 위 [ODBC Error] (테이블이 없으면 doesn't exist)
@@ -51,6 +54,56 @@ static bool LoadMonsters(DBConnection& db)
 		s_monsters[row.monsterId] = row;	// 복사해서 저장 (row는 다음 Fetch에서 덮어써짐)
 	}
 
+	return true;
+}
+
+static bool LoadItems(DBConnection& db)
+{
+	ItemData row;
+
+	DBBind<0, 1> query(db, L"SELECT item_id FROM data_item");
+	query.BindCol(0, row.itemId);
+
+	if (query.Execute() == false)
+		return false;
+
+	while (query.Fetch())
+		s_items[row.itemId] = row;
+	return true;
+}
+
+// data_monster_drop: 몬스터마다 드랍표를 MonsterData.drops에 붙임
+//   monster_id는 DB FK가 막지만, item_id는 다른 파일(item.sql)이라 FK가 없어서 서버가 확인 (skill_id와 같은 이유)
+static bool LoadMonsterDrops(DBConnection& db)
+{
+	int32 monsterId = 0;
+	MonsterDropData row;
+
+	DBBind<0, 5> query(db, L"SELECT monster_id, item_id, chance_permille, min_count, max_count FROM data_monster_drop ORDER BY monster_id, item_id");
+	query.BindCol(0, monsterId);
+	query.BindCol(1, row.itemId);
+	query.BindCol(2, row.chancePermille);
+	query.BindCol(3, row.minCount);
+	query.BindCol(4, row.maxCount);
+
+	if (query.Execute() == false)
+		return false;
+
+	while (query.Fetch())
+	{
+		if (FindItemData(row.itemId) == nullptr)
+		{
+			LogLine() << "[GameData] monster " << monsterId << " drop: unknown item_id " << row.itemId;
+			return false;
+		}
+		auto monster = s_monsters.find(monsterId);
+		if (monster == s_monsters.end())
+		{
+			LogLine() << "[GameData] drop for unknown monster_id " << monsterId;
+			return false;
+		}
+		monster->second.drops.push_back(row);
+	}
 	return true;
 }
 
@@ -163,15 +216,17 @@ bool LoadGameData()
 		return false;
 	}
 
-	// 순서 중요: 몬스터가 스킬을, 스폰이 몬스터 종류를 확인하므로 스킬 -> 몬스터 -> 스폰 (레벨은 혼자라 아무 때나)
-	if (LoadSkills(db) == false || LoadLevels(db) == false || LoadMonsters(db) == false || LoadMonsterSpawns(db) == false)
+	// 순서 중요: 몬스터가 스킬을, 드랍표가 아이템과 몬스터를, 스폰이 몬스터 종류를 확인
+	//   스킬 -> 레벨 -> 아이템 -> 몬스터 -> 몬스터 드랍 -> 스폰
+	if (LoadSkills(db) == false || LoadLevels(db) == false || LoadItems(db) == false || LoadMonsters(db) == false
+		|| LoadMonsterDrops(db) == false || LoadMonsterSpawns(db) == false)
 	{
 		LogLine() << "[GameData] failed to load (run Database/Setup-Database.ps1 to create data tables)";
 		return false;
 	}
 
 	LogLine() << "[GameData] loaded " << s_monsters.size() << " monsters, " << s_spawns.size() << " spawns, "
-		<< s_skills.size() << " skills, " << s_expToNext.size() << " levels";
+		<< s_skills.size() << " skills, " << s_expToNext.size() << " levels, " << s_items.size() << " items";
 	return true;
 }
 
@@ -190,6 +245,12 @@ const SkillData* FindSkillData(int32 skillId)
 {
 	auto it = s_skills.find(skillId);
 	return (it != s_skills.end()) ? &it->second : nullptr;
+}
+
+const ItemData* FindItemData(int32 itemId)
+{
+	auto it = s_items.find(itemId);
+	return (it != s_items.end()) ? &it->second : nullptr;
 }
 
 int32 GetMaxLevel()

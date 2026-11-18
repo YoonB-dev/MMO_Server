@@ -2,6 +2,7 @@
 #include "Grid.h"
 #include "Player.h"
 #include "Monster.h"
+#include "Drop.h"
 #include <cmath>
 #include <algorithm>
 
@@ -50,6 +51,20 @@ void Grid::Remove(const MonsterRef& monster)
 		return;
 	EraseFrom(_cells[monster->gridCell].monsters, monster);
 	monster->gridCell = -1;
+}
+
+void Grid::Add(const DropRef& drop)
+{
+	drop->gridCell = CellIndexOf(*drop);
+	_cells[drop->gridCell].drops.push_back(drop);
+}
+
+void Grid::Remove(const DropRef& drop)
+{
+	if (drop->gridCell < 0)
+		return;
+	EraseFrom(_cells[drop->gridCell].drops, drop);
+	drop->gridCell = -1;
 }
 
 void Grid::Update(const PlayerRef& player)
