@@ -135,6 +135,62 @@ static void SendChatTestBurst(PacketSessionRef& session)
 	SendChat(session, Protocol::CHAT_CHANNEL_ROOM, "again");
 }
 
+// 서버가 알려 준 칸 하나를 내 인벤토리에 반영 (item_id 0 = 빈 칸)
+static void ApplySlot(shared_ptr<ServerSession>& me, const Protocol::InventorySlot& slot)
+{
+	if (slot.item_id() == 0)
+		me->slots.erase(slot.slot());
+	else
+		me->slots[slot.slot()] = { slot.item_id(), slot.count() };
+}
+
+static void SendMoveItem(PacketSessionRef& session, int32 from, int32 to)
+{
+	Protocol::C_MOVE_ITEM pkt;
+	pkt.set_from_slot(from);
+	pkt.set_to_slot(to);
+	session->Send(ServerPacketHandler::MakeSendBuffer(pkt));
+}
+
+// 칸 옮기기 확인용 (Test/Scenarios/InventoryMove.ps1, --move-item-test)
+//   인벤토리가 정확히 젤리 50(a), 젤리 10(b), 검(c), 검(d) 네 칸이 되면 한 번에 보냄 (서버는 받은 순서대로 처리)
+//     1. b -> 19(빈 칸)  옮기기: b 빈 칸, 19 = 젤리 10
+//     2. c -> a           바꾸기: c = 젤리 50, a = 검
+//     3. c -> 19          합치기: 19 = 50 (10 + 40), c = 10 남음
+//     4. a -> a / b -> a / 99 -> 0   거절 3종 (같은 칸, 빈 칸에서, 범위 밖)
+//   끝난 뒤: a 검, c 젤리 10, d 검, 19 젤리 50, b는 빈 칸 (젤리 60, 검 2개 그대로)
+static void TryMoveItemTest(PacketSessionRef& session)
+{
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+	if (GMoveItemTest == false || me->moveItemTestSent || me->slots.size() != 4)
+		return;
+
+	int32 a = -1, b = -1, c = -1, d = -1;
+	for (auto& [slot, item] : me->slots)
+	{
+		if (item.first == 1001 && item.second == 50)
+			a = slot;
+		else if (item.first == 1001 && item.second == 10)
+			b = slot;
+		else if (item.first == 2001)
+			(c < 0 ? c : d) = slot;	// 검 두 칸 중 앞 칸이 c
+	}
+	if (a < 0 || b < 0 || c < 0 || d < 0 || me->slots.count(19) > 0)
+		return;
+
+	me->moveItemTestSent = true;
+	SendMoveItem(session, b, 19);
+	SendMoveItem(session, c, a);
+	SendMoveItem(session, c, 19);
+	SendMoveItem(session, a, a);
+	SendMoveItem(session, b, a);
+	SendMoveItem(session, 99, 0);
+
+	ostringstream line;
+	line << "MOVE_ITEM_TEST sent a=" << a << " b=" << b << " c=" << c << " d=" << d;
+	Log(me->GetClientId(), line.str());
+}
+
 static void SendMoveInput(PacketSessionRef& session, float dirX, float dirZ, uint32 seq)
 {
 	Protocol::C_MOVE_INPUT pkt;
@@ -219,6 +275,8 @@ bool Handle_S_ENTER_GAME(PacketSessionRef& session, Protocol::S_ENTER_GAME& pkt)
 	me->myId = pkt.player().object_id();
 	me->myX = pkt.player().move_info().pos_info().x();
 	me->myZ = pkt.player().move_info().pos_info().z();
+	for (const Protocol::InventorySlot& slot : pkt.inventory())	// 내 인벤토리 (아이템이 있는 칸만 옴)
+		ApplySlot(me, slot);
 
 	if (GInputTest)
 		SendInputTestBurst(session);
@@ -688,5 +746,25 @@ bool Handle_S_CHANGE_ITEM(PacketSessionRef& session, Protocol::S_CHANGE_ITEM& pk
 	for (int32 i = 0; i < pkt.slots_size(); i++)
 		line << (i > 0 ? "," : "") << pkt.slots(i).slot() << ":" << pkt.slots(i).item_id() << "x" << pkt.slots(i).count();
 	Log(ClientIdOf(session), line.str());
+
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+	for (const Protocol::InventorySlot& slot : pkt.slots())
+		ApplySlot(me, slot);
+	TryMoveItemTest(session);
+	return true;
+}
+
+// 칸 옮기기 결과 (또는 거절했을 때 서버 값으로 되돌리기): 받은 칸을 그대로 덮어씀
+bool Handle_S_INVENTORY_SLOTS(PacketSessionRef& session, Protocol::S_INVENTORY_SLOTS& pkt)
+{
+	ostringstream line;
+	line << "S_INVENTORY_SLOTS slots=";
+	for (int32 i = 0; i < pkt.slots_size(); i++)
+		line << (i > 0 ? "," : "") << pkt.slots(i).slot() << ":" << pkt.slots(i).item_id() << "x" << pkt.slots(i).count();
+	Log(ClientIdOf(session), line.str());
+
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+	for (const Protocol::InventorySlot& slot : pkt.slots())
+		ApplySlot(me, slot);
 	return true;
 }

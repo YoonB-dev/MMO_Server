@@ -27,7 +27,9 @@ public:
 private:
 	static bool	SelectCharacter(DBConnection& db, int64 accountId, int64 characterId, CharacterData& out, bool& found);
 	static bool	SelectItems(DBConnection& db, int64 characterId, vector<ItemSlot>& out);
-	static bool	SaveCharacter(DBConnection& db, const CharacterData& data);		// UpdateCharacter + 아이템마다 UpsertItem
+	static bool	SaveCharacter(DBConnection& db, const CharacterData& data);		// 한 트랜잭션: UpdateCharacter + UpsertItem + DeleteEmptySlots
+	static bool	ExecuteRaw(DBConnection& db, const WCHAR* sql);					// START TRANSACTION / COMMIT / ROLLBACK
+	static bool	DeleteEmptySlots(DBConnection& db, const CharacterData& data);
 	static bool	UpdateCharacter(DBConnection& db, const CharacterData& data);
 	static bool	UpsertItem(DBConnection& db, int64 characterId, const ItemSlot& item);
 

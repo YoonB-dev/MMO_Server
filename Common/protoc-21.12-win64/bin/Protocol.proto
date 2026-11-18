@@ -195,3 +195,20 @@ message S_CHANGE_ITEM
 	int32 gained = 3;					// 이번에 얻은 개수 (알림용)
 	repeated InventorySlot slots = 4;	// 바뀐 칸들의 바뀐 뒤 상태 (그대로 덮어쓰면 됨)
 }
+
+// ==================== 인벤토리 ====================
+// 클라 -> 서버: 인벤토리에서 끌어다 놓기 (from 칸의 아이템을 to 칸으로)
+//   빈 칸이면 옮김 / 다른 아이템이면 서로 바꿈 / 같은 아이템이면 합침 (max_stack까지, 넘치면 from에 남음)
+//   같은 아이템인데 to가 가득이면 서로 바꿈
+message C_MOVE_ITEM
+{
+	int32 from_slot = 1;
+	int32 to_slot = 2;
+}
+
+// 서버 -> 클라(본인만): 이 칸들이 지금 이렇게 됐음 (그대로 덮어쓰면 됨, item_id 0 = 빈 칸)
+//   옮기기 결과, 그리고 거절했을 때 클라가 미리 바꿔 둔 화면을 되돌리는 용도 (두 칸의 서버 값)
+message S_INVENTORY_SLOTS
+{
+	repeated InventorySlot slots = 1;
+}

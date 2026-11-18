@@ -1137,6 +1137,65 @@ void Room::GiveItem(const PlayerRef& player, int32 itemId, int32 amount)
 	SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
 }
 
+// C_MOVE_ITEM: Room 줄에서 한 번에 하나씩 -> 옮기는 중간에 줍기가 끼어들지 않음 (원자적, 락 없음)
+//   아이템 수는 항상 그대로: 합치기는 +put / -put, 나머지는 두 칸의 내용 바꾸기라 생기거나 사라지는 경로가 없음
+void Room::HandleMoveItem(PlayerRef player, int32 from, int32 to)
+{
+	if (_players.count(player->GetObjectId()) == 0)
+		return;
+
+	const int32 size = Player::inventorySize;
+	if (from < 0 || from >= size || to < 0 || to >= size)
+	{
+		LogLine() << "[Room] reject item move: player " << player->GetObjectId() << ", out of range";
+		return;		// 칸 번호부터 틀림 -> 되돌릴 칸도 없음
+	}
+
+	// 참조: 복사본이 아니라 인벤토리 안의 칸 자체 -> 아래에서 바꾸면 실제 인벤토리가 바뀜
+	ItemSlot& src = player->inventory[from];
+	ItemSlot& dst = player->inventory[to];
+	if (from == to || src.itemId == 0)
+	{
+		LogLine() << "[Room] reject item move: player " << player->GetObjectId() << ", " << (from == to ? "same slot" : "empty slot");
+		SendSlots(player, from, to);	// 클라가 미리 바꿔 둔 화면을 서버 값으로 되돌림
+		return;
+	}
+
+	const int32 maxStack = FindItemData(src.itemId)->maxStack;	// 인벤토리에는 data_item에 있는 아이템만 들어 있음 (불러올 때 걸러짐)
+	if (dst.itemId == src.itemId && dst.count < maxStack)
+	{
+		// 같은 아이템, 자리 남음 -> 합침. 넘치면 from에 남음
+		const int32 space = maxStack - dst.count;
+		const int32 put = (src.count < space) ? src.count : space;
+		dst.count += put;
+		src.count -= put;
+		if (src.count == 0)
+			src.itemId = 0;		// 다 옮겨졌으면 빈 칸
+	}
+	else
+	{
+		// 빈 칸이면 옮김, 다른 아이템(또는 같은 아이템인데 가득)이면 서로 바꿈
+		//   빈 칸은 itemId 0, count 0이라 "내용 바꾸기" 하나로 둘 다 됨. 칸 번호(slot)는 그대로 둠
+		std::swap(src.itemId, dst.itemId);
+		std::swap(src.count, dst.count);
+	}
+	SendSlots(player, from, to);
+}
+
+void Room::SendSlots(const PlayerRef& player, int32 slotA, int32 slotB)
+{
+	Protocol::S_INVENTORY_SLOTS pkt;
+	for (const int32 slot : { slotA, slotB })
+	{
+		const ItemSlot& s = player->inventory[slot];
+		Protocol::InventorySlot* out = pkt.add_slots();
+		out->set_slot(s.slot);
+		out->set_item_id(s.itemId);
+		out->set_count(s.count);
+	}
+	SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
+}
+
 // 1초마다 (Tick): 수명이 모두 같아서 만료된 드랍은 _drops 앞쪽(오래된 쪽)에 모여 있음
 //   -> 앞에서부터 지우다가 아직 안 된 게 나오면 멈춤 (전체를 돌지 않음)
 void Room::ExpireDrops()
