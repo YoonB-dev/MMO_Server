@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "GameObject.h"
+#include "GameData.h"	// GetExpToNext, GetMaxLevel (레벨표)
 
 // 클라가 보낸 이동 입력 하나 (C_MOVE_INPUT의 필드와 1:1)
 struct MoveInput
@@ -19,6 +20,8 @@ struct CharacterData
 	float	z = 0.f;
 	int32	hp = 0;
 	int32	mp = 0;
+	int32	level = 1;
+	int64	exp = 0;			// 이번 레벨에서 쌓인 경험치
 	WCHAR	nickname[21] = {};	// 불러올 때만 채움 (게임 중에 안 바뀌어서 저장하지 않음). 최대 20글자 + 끝 0
 };
 
@@ -62,6 +65,12 @@ public:
 		GetStatInfo()->set_max_hp(MAX_HP);
 		mp = (data.mp < 0) ? 0 : (data.mp > MAX_MP ? MAX_MP : data.mp);
 
+		// 레벨표가 바뀌어 최대 레벨이 낮아졌거나, DB를 손으로 고친 경우에도 서버가 망가지지 않게
+		const int32 level = (data.level < 1) ? 1 : (data.level > GetMaxLevel() ? GetMaxLevel() : data.level);
+		GetStatInfo()->set_level(level);
+		const int64 need = GetExpToNext(level);
+		exp = (data.exp < 0 || need == 0) ? 0 : (data.exp >= need ? need - 1 : data.exp);
+
 		// 닉네임 WCHAR(UTF-16, DB에서 옴) -> UTF-8(protobuf string). 한글이 있어서 한 글자씩 자르면 깨짐
 		char utf8[64] = {};	// 최대 20글자 x 한 글자 최대 3바이트 + 끝 0
 		const int32 len = ::WideCharToMultiByte(CP_UTF8, 0, data.nickname, -1, utf8, sizeof(utf8), nullptr, nullptr);
@@ -74,7 +83,33 @@ public:
 	//   닉네임은 저장하지 않아서 비워 둠
 	CharacterData ToCharacterData()
 	{
-		return CharacterData{ _characterId, _accountId, GetPosInfo()->x(), GetPosInfo()->z(), GetStatInfo()->hp(), mp };
+		return CharacterData{ _characterId, _accountId, GetPosInfo()->x(), GetPosInfo()->z(), GetStatInfo()->hp(), mp, GetLevel(), exp };
+	}
+
+	// 레벨은 StatInfo 한 곳에만 둠 (HP처럼). 따로 변수를 두면 두 값이 어긋날 수 있음
+	int32	GetLevel() { return GetStatInfo()->level(); }
+
+	// 경험치 얻기 (Room::GiveExp가 호출). 값만 바꾸고 오른 레벨 수를 돌려줌 -> 보내는 건 Room
+	//   레벨업: 필요한 양을 넘기면 넘친 만큼 다음 레벨로 (한 번에 여러 레벨도). 최대 레벨이면 더 안 쌓음
+	int32 GainExp(int64 amount)
+	{
+		int32 levelsUp = 0;
+		exp += amount;
+		while (true)
+		{
+			const int64 need = GetExpToNext(GetLevel());
+			if (need == 0)
+			{
+				exp = 0;		// 최대 레벨
+				break;
+			}
+			if (exp < need)
+				break;
+			exp -= need;
+			GetStatInfo()->set_level(GetLevel() + 1);
+			levelsUp++;
+		}
+		return levelsUp;
 	}
 
 	// 연결이 이미 끊겼으면 nullptr
@@ -136,6 +171,9 @@ public:
 	// --- 스킬 (Room의 JobQueue 안에서만 접근 -> 락 없음) ---
 	xunordered_map<int32, uint64>	skillReadyTick;	// 스킬 id -> 다시 쓸 수 있는 서버 틱. 처음 쓰는 스킬은 항목이 없음 = 0 = 바로 사용 가능
 	int32	mp = MAX_MP;	// 지금 MP (입장할 때 가득)
+
+	// --- 성장 (Room의 JobQueue 안에서만 접근 -> 락 없음) ---
+	int64	exp = 0;	// 이번 레벨에서 쌓인 경험치 (본인만 보는 값이라 ObjectInfo 밖에. 레벨은 StatInfo)
 
 	// --- 시야 (Room의 JobQueue 안에서만 접근 -> 락 없음) ---
 	//   지금 이 클라에 보이는 객체 id -> 마지막으로 "시야 안"이라고 확인한 틱

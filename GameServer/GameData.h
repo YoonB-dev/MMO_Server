@@ -11,6 +11,7 @@ constexpr int32 MONSTER_SKILL_ID_BEGIN = 101;	// 이 번호부터는 몬스터 �
 struct MonsterData
 {
 	int32	monsterId = 0;
+	int32	level = 1;			// 이름표 레벨 (data_monster.level, 표시용)
 	int32	maxHp = 0;			// 스폰할 때 HP
 	float	patrolRange = 0.f;	// 스폰 기준 ±범위 안에서 배회
 	float	patrolSpeed = 0.f;
@@ -24,6 +25,7 @@ struct MonsterData
 	float	returnSpeed = 0.f;
 	int32	skillId = 0;				// 공격 스킬 (data_skill)
 	const SkillData*	skill = nullptr;	// 로드할 때 skillId로 찾아서 연결해 둠 (s_skills 원소, 주소가 안 바뀜)
+	int32	expReward = 0;		// 처치한 사람(마지막 공격자)이 받는 경험치 (data_monster.exp_reward)
 };
 
 // data_monster_spawn 한 줄: 어디에 어떤 몬스터가 나오나
@@ -53,3 +55,5 @@ bool							LoadGameData();						// main에서 DB 접속 후 한 번. 실패하�
 const MonsterData*				FindMonsterData(int32 monsterId);	// 없으면 nullptr
 const vector<MonsterSpawnData>&	GetMonsterSpawns();
 const SkillData*				FindSkillData(int32 skillId);		// 없으면 nullptr
+int32							GetMaxLevel();						// data_level의 마지막 레벨
+int64							GetExpToNext(int32 level);			// 그 레벨에서 다음 레벨까지 필요한 경험치. 0 = 최대 레벨 (범위 밖도 0)

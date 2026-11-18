@@ -87,7 +87,8 @@ private:
 	void	SpawnMonsters();
 	void	SpawnLoadMonsters();								// 부하 테스트용 (SetLoadMonsters로 정한 수만큼)
 	void	SpawnMonster(MonsterSpawnData spawn);				// 한 마리 생성 + S_SPAWN. 시작할 때와 리스폰 때 같이 씀
-	void	KillMonster(MonsterRef monster, uint64 killerId);	// 방에서 빼기 + S_DIE + 리스폰 예약
+	void	KillMonster(MonsterRef monster, uint64 killerId);	// 방에서 빼기 + S_DIE + 처치 보상 + 리스폰 예약
+	void	GiveExp(uint64 killerId, int32 amount);				// 처치 경험치: 처치자에게 S_CHANGE_EXP, 레벨업이면 주변에 S_LEVEL_UP
 	void	KillPlayer(const PlayerRef& player, uint64 killerId);	// 방에 남김(시체) + 정지 + S_DIE + 부활 예약
 	void	RevivePlayer(uint64 playerId);						// 부활 (KillPlayer의 DoTimer). id로 받음: 그사이 나갔으면 못 찾고 끝
 	void	ApplyDamage(GameObject& target, uint64 attackerId, int32 damage);

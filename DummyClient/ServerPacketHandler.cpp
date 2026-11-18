@@ -198,6 +198,7 @@ bool Handle_S_ENTER_GAME(PacketSessionRef& session, Protocol::S_ENTER_GAME& pkt)
 		const Protocol::PosInfo& pos = pkt.player().move_info().pos_info();
 		line << " pos=(" << pos.x() << ", " << pos.z() << ") hp=" << pkt.player().stat_info().hp();	// 저장된 캐릭터를 불러왔는지 확인용
 		line << " name=" << pkt.player().name() << " name_hex=" << HexOf(pkt.player().name());	// 한글 이름은 name_hex로 비교
+		line << " level=" << pkt.player().stat_info().level() << " exp=" << pkt.exp() << " next=" << pkt.exp_to_next();	// 저장된 레벨 / 경험치 확인용
 	}
 	if (pkt.success() == false)
 		line << " error=" << pkt.error();	// Enum.proto EnterGameError (1 토큰 오류, 2 만료, 3 중복 요청, 4 서버 오류, 5 캐릭터 없음/남의 것)
@@ -392,7 +393,7 @@ bool Handle_S_SPAWN(PacketSessionRef& session, Protocol::S_SPAWN& pkt)
 		line << " " << object.object_id();
 		if (object.object_type() == Protocol::OBJECT_TYPE_MONSTER)
 		{
-			line << "(monster hp=" << object.stat_info().hp() << ")";	// stat_info가 실려 오는지 확인용
+			line << "(monster hp=" << object.stat_info().hp() << " lv=" << object.stat_info().level() << ")";	// stat_info가 실려 오는지 확인용
 			me->monsterIds.insert(object.object_id());
 		}
 		if (object.has_cast_info())	// 시전 도중에 보이게 된 객체 (예고 게이지가 이미 일부 찬 상태)
@@ -626,5 +627,23 @@ bool Handle_S_CHAT(PacketSessionRef& session, Protocol::S_CHAT& pkt)
 		me->chatReplied = true;
 		SendChat(session, Protocol::CHAT_CHANNEL_ROOM, "reply");
 	}
+	return true;
+}
+
+// 경험치 (처치자 본인만): 테스트는 처치자 한 명에게만 오는지와 레벨업 후 넘친 양을 봄
+bool Handle_S_CHANGE_EXP(PacketSessionRef& session, Protocol::S_CHANGE_EXP& pkt)
+{
+	ostringstream line;
+	line << "S_CHANGE_EXP level=" << pkt.level() << " exp=" << pkt.exp() << " next=" << pkt.exp_to_next() << " gained=" << pkt.gained();
+	Log(ClientIdOf(session), line.str());
+	return true;
+}
+
+// 레벨업 (그 플레이어가 보이는 사람 모두, 본인 포함)
+bool Handle_S_LEVEL_UP(PacketSessionRef& session, Protocol::S_LEVEL_UP& pkt)
+{
+	ostringstream line;
+	line << "S_LEVEL_UP id=" << pkt.object_id() << " level=" << pkt.level();
+	Log(ClientIdOf(session), line.str());
 	return true;
 }

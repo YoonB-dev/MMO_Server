@@ -38,6 +38,8 @@ message S_ENTER_GAME
 	int32 mp = 3;			// 내 MP. 본인만 보는 정보라 ObjectInfo(다른 사람 S_SPAWN에도 가는 정보)가 아니라 여기에
 	int32 max_mp = 4;
 	EnterGameError error = 5;	// success = false일 때 이유
+	int64 exp = 6;			// 내 경험치 (이번 레벨에서 쌓인 양). 본인만 보는 값
+	int64 exp_to_next = 7;	// 다음 레벨까지 필요한 양 (0 = 최대 레벨). 클라가 레벨표 없이 경험치 바를 그림
 }
 
 message S_SPAWN
@@ -141,4 +143,21 @@ message S_CHAT
 	ChatChannel channel = 2;
 	string message = 3;
 	string sender_name = 4;	// 보낸 사람 닉네임 (UTF-8). 방 전체 채팅은 보낸 사람이 내 시야 밖일 수 있어서 이름을 직접 실음
+}
+
+// ==================== 성장 ====================
+// 서버 -> 클라(본인만): 경험치가 바뀜 (몬스터 처치) -> 경험치 바, "+20 EXP"
+message S_CHANGE_EXP
+{
+	int32 level = 1;		// 바뀐 뒤 레벨
+	int64 exp = 2;			// 바뀐 뒤 경험치 (레벨이 올랐으면 넘친 양)
+	int64 exp_to_next = 3;	// 다음 레벨까지 필요한 양 (0 = 최대 레벨)
+	int32 gained = 4;		// 이번에 얻은 양 (표시용)
+}
+
+// 서버 -> 클라(그 플레이어가 보이는 사람, 본인 포함): 레벨업 연출 + 이름표 레벨 갱신
+message S_LEVEL_UP
+{
+	uint64 object_id = 1;
+	int32 level = 2;
 }

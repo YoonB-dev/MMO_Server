@@ -390,6 +390,8 @@ void Room::Enter(PlayerRef player)
 		*pkt.mutable_player() = player->GetObjectInfo();
 		pkt.set_mp(player->mp);				// MP는 본인만 보는 정보라 ObjectInfo 밖에 따로
 		pkt.set_max_mp(Player::MAX_MP);
+		pkt.set_exp(player->exp);			// 경험치도 본인만 (레벨은 player.stat_info에 이미 있음)
+		pkt.set_exp_to_next(GetExpToNext(player->GetLevel()));
 		SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
 	}
 
@@ -897,12 +899,41 @@ void Room::KillMonster(MonsterRef monster, uint64 killerId)
 	_grid.Remove(monster);
 	_monsters.erase(monsterId);	// 이제 공격 대상, 틱, 시야 어디에도 안 나옴
 
+	// 처치 보상: 경험치는 마지막 공격자에게
+	GiveExp(killerId, monster->GetData().expReward);
+
 	const MonsterSpawnData& spawn = monster->GetSpawn();
 	LogLine() << "[Room] monster " << monsterId << " killed by " << killerId
 		<< ", respawn in " << spawn.respawnMs << "ms (spawn " << spawn.spawnId << ")";
 
 	// 같은 객체를 되살리지 않고 respawn_ms 뒤에 새 id로 만듦. spawn은 예약된 job 안에 복사돼서 monster가 지워져도 안전
 	DoTimer(static_cast<uint64>(spawn.respawnMs), &Room::SpawnMonster, spawn);
+}
+
+// 처치 경험치: 마지막 공격자에게. 경험치는 처치자에게만, 레벨업은 처치자가 보이는 사람에게
+void Room::GiveExp(uint64 killerId, int32 amount)
+{
+	PlayerRef killer = FindPlayer(killerId);
+	if (killer == nullptr || amount <= 0)
+		return;
+
+	const int32 levelsUp = killer->GainExp(amount);
+
+	Protocol::S_CHANGE_EXP expPkt;
+	expPkt.set_level(killer->GetLevel());
+	expPkt.set_exp(killer->exp);
+	expPkt.set_exp_to_next(GetExpToNext(killer->GetLevel()));
+	expPkt.set_gained(amount);
+	SendTo(killer, ClientPacketHandler::MakeSendBuffer(expPkt));
+
+	if (levelsUp > 0)
+	{
+		LogLine() << "[Room] level up: player " << killerId << " -> " << killer->GetLevel();
+		Protocol::S_LEVEL_UP upPkt;
+		upPkt.set_object_id(killerId);
+		upPkt.set_level(killer->GetLevel());
+		BroadcastToViewers(*killer, ClientPacketHandler::MakeSendBuffer(upPkt));	// 처치자 본인 포함
+	}
 }
 
 // 몬스터가 플레이어를 맞힘 (Monster::UpdateAttack). 몬스터 쪽 HandleSkill처럼 "데미지 + 죽음 처리"를 한 곳에서

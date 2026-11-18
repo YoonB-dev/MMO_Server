@@ -123,7 +123,7 @@ bool DBQueue::SelectCharacter(DBConnection& db, int64 accountId, int64 character
 	out.characterId = characterId;
 
 	// account_id도 같이 봄 -> 토큰의 계정 캐릭터가 아니면 줄이 안 나옴 (남의 캐릭터로 입장 불가)
-	DBBind<2, 5> query(db, L"SELECT nickname, pos_x, pos_z, hp, mp FROM player_character WHERE character_id = ? AND account_id = ?");
+	DBBind<2, 7> query(db, L"SELECT nickname, pos_x, pos_z, hp, mp, level, exp FROM player_character WHERE character_id = ? AND account_id = ?");
 	query.BindParam(0, characterId);
 	query.BindParam(1, accountId);
 	query.BindCol(0, out.nickname);		// WCHAR[21] 배열 -> 템플릿이 크기(21)까지 같이 넘김
@@ -131,6 +131,8 @@ bool DBQueue::SelectCharacter(DBConnection& db, int64 accountId, int64 character
 	query.BindCol(2, out.z);
 	query.BindCol(3, out.hp);
 	query.BindCol(4, out.mp);
+	query.BindCol(5, out.level);
+	query.BindCol(6, out.exp);
 
 	if (query.Execute() == false)
 		return false;
@@ -143,11 +145,13 @@ bool DBQueue::UpdateCharacter(DBConnection& db, const CharacterData& data)
 {
 	CharacterData row = data;	// BindParam은 값을 바꿀 수 있는 변수의 주소를 받아서 복사본으로
 
-	DBBind<5, 0> query(db, L"UPDATE player_character SET pos_x = ?, pos_z = ?, hp = ?, mp = ?, updated_at = UTC_TIMESTAMP() WHERE character_id = ?");
+	DBBind<7, 0> query(db, L"UPDATE player_character SET pos_x = ?, pos_z = ?, hp = ?, mp = ?, level = ?, exp = ?, updated_at = UTC_TIMESTAMP() WHERE character_id = ?");
 	query.BindParam(0, row.x);
 	query.BindParam(1, row.z);
 	query.BindParam(2, row.hp);
 	query.BindParam(3, row.mp);
-	query.BindParam(4, row.characterId);
+	query.BindParam(4, row.level);
+	query.BindParam(5, row.exp);
+	query.BindParam(6, row.characterId);
 	return query.Execute();
 }

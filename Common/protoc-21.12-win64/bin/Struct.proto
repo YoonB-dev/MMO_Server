@@ -31,6 +31,7 @@ message StatInfo
 {
 	int32 hp = 1;
 	int32 max_hp = 2;
+	int32 level = 3;	// 이름표 "Lv.N". 플레이어는 캐릭터 레벨, 몬스터는 data_monster.level
 }
 
 // 진행 중인 시전 (몬스터 예고 공격). 시전 중이 아니면 ObjectInfo에 없음 (has_cast_info() == false)
