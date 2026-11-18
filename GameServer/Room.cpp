@@ -454,6 +454,13 @@ void Room::SetDropLifetime(uint64 seconds)
 	_dropLifetimeTicks = (seconds > 0 ? seconds : 1) * TICKS_PER_SECOND;
 }
 
+// 0 이하(인자를 안 줌)면 기본값 그대로. 0을 상한으로 쓰면 AddDrop이 비어 있는 _drops.begin()을 지우려 하므로 받지 않음
+void Room::SetMaxDrops(int32 count)
+{
+	if (count > 0)
+		_maxDrops = count;
+}
+
 void Room::SetLoadMonsters(int32 count, float area)
 {
 	_loadMonsterCount = (std::max)(count, 0);
@@ -996,8 +1003,11 @@ void Room::SpawnDrops(Monster& monster)
 // 하나 만들기: 상한이면 가장 오래된 것부터 지움 -> 자리를 흩뿌림 -> 목록과 Grid에 추가
 void Room::AddDrop(int32 itemId, int32 amount, float x, float z)
 {
-	if (static_cast<int32>(_drops.size()) >= MAX_DROPS)
+	if (static_cast<int32>(_drops.size()) >= _maxDrops)
+	{
+		LogLine() << "[Room] drop limit " << _maxDrops << ": removed oldest drop " << _drops.begin()->first;
 		RemoveDrop(_drops.begin()->second);
+	}
 
 	// 원 안에 고르게: 각도는 그대로, 반지름은 sqrt를 씌움 (안 씌우면 가운데로 몰림)
 	std::uniform_real_distribution<float> unit(0.f, 1.f);

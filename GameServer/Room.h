@@ -41,7 +41,7 @@ class Room : public JobQueue
 	static constexpr float	VIEW_EVENT_SLACK = 1.f;	// 이벤트 받는 사람 찾을 때 여유 (틱 도중에는 위치가 시야 계산 뒤로 한 틱만큼 움직였을 수 있음)
 	static constexpr float	SKILL_RANGE_SLACK = 1.f;	// 사거리 여유 (m). 클라가 보는 위치는 지연만큼 다름 (몬스터 4m/s x 왕복 200ms = 0.8m)
 	// 바닥 드랍
-	static constexpr int32	MAX_DROPS = 500;			// 방 전체 상한. 넘으면 가장 오래된 것부터 지움 (몬스터가 아주 많을 때 대비)
+	static constexpr int32	DEFAULT_MAX_DROPS = 500;	// 방 전체 상한 기본값. 넘으면 가장 오래된 것부터 지움 (몬스터가 아주 많을 때 대비)
 	static constexpr float	DROP_SCATTER_RADIUS = 1.f;	// 몬스터 자리에서 이 반경 안에 흩뿌림 (m)
 	static constexpr uint64	DROP_PICKUP_DELAY_TICKS = 10;	// 떨어진 뒤 0.5초 동안 못 주움
 	//   이 사이에 UpdateView가 주변에 S_SPAWN을 보냄 -> 아무도 못 본 드랍을 줍는 일이 없음 (줍기 연타 매크로 포함)
@@ -79,6 +79,7 @@ public:
 	void	SetSaveInterval(uint64 seconds);	// 주기 저장 간격 (Start 전에 main에서 한 번, 기본 60초)
 	void	SetLoadMonsters(int32 count, float area);	// 부하 테스트용 몬스터 추가 (Start 전에 main에서 한 번, 기본 0마리)
 	void	SetDropLifetime(uint64 seconds);			// 바닥 드랍 수명 (Start 전에 main에서 한 번, 기본 60초)
+	void	SetMaxDrops(int32 count);					// 바닥 드랍 상한 (Start 전에 main에서 한 번, 0 이하면 기본 500 그대로)
 	void	Start();				// 첫 틱 예약 (main에서 한 번)
 	void	Enter(PlayerRef player);
 	void	Leave(PlayerRef player);	// 방에서 빼기 + 저장 요청 (저장할 값을 꺼내야 해서 id가 아니라 Player)
@@ -137,6 +138,7 @@ private:
 	xunordered_map<uint64, MonsterRef>	_monsters;	// 위와 같음 (Start에서 채움)
 	xmap<uint64, DropRef>				_drops;		// 바닥 드랍. 정렬된 map: id 순 = 만든 순서 (id가 계속 커짐) -> begin()이 가장 오래된 드랍
 	uint64	_dropLifetimeTicks = 60 * TICKS_PER_SECOND;	// 드랍 수명 (--drop-lifetime-sec, 테스트에서 짧게)
+	int32	_maxDrops = DEFAULT_MAX_DROPS;				// 드랍 상한 (--max-drops, 테스트에서 작게)
 	std::mt19937	_rng{ std::random_device{}() };		// 드랍 확률, 골드 양, 흩뿌릴 자리 (Room 줄에서만 써서 하나로 충분)
 
 	uint64	_tick = 0;				// 서버 틱 번호 (S_MOVE의 server_tick)
