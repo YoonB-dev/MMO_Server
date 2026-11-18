@@ -144,15 +144,16 @@ bool DBQueue::SelectCharacter(DBConnection& db, int64 accountId, int64 character
 	return true;
 }
 
-// 인벤토리: 이 캐릭터의 player_item 줄 전부
-bool DBQueue::SelectItems(DBConnection& db, int64 characterId, vector<ItemStack>& out)
+// 인벤토리: 이 캐릭터의 player_inventory 줄 전부 (아이템이 있는 칸들)
+bool DBQueue::SelectItems(DBConnection& db, int64 characterId, vector<ItemSlot>& out)
 {
-	ItemStack row;
+	ItemSlot row;
 
-	DBBind<1, 2> query(db, L"SELECT item_id, count FROM player_item WHERE character_id = ?");
+	DBBind<1, 3> query(db, L"SELECT slot, item_id, count FROM player_inventory WHERE character_id = ?");
 	query.BindParam(0, characterId);
-	query.BindCol(0, row.itemId);
-	query.BindCol(1, row.count);
+	query.BindCol(0, row.slot);
+	query.BindCol(1, row.itemId);
+	query.BindCol(2, row.count);
 
 	if (query.Execute() == false)
 		return false;
@@ -162,14 +163,15 @@ bool DBQueue::SelectItems(DBConnection& db, int64 characterId, vector<ItemStack>
 	return true;
 }
 
-// 저장 한 명: 캐릭터 줄 UPDATE + 아이템마다 UPSERT
+// 저장 한 명: 캐릭터 줄 UPDATE + 아이템이 있는 칸마다 UPSERT
 //   인벤토리는 전부 씀 (바뀐 것만 쓰면, 저장이 실패했을 때 그 변경이 다음 저장에서도 빠질 수 있음)
+//   빈 칸이 된 줄 지우기는 아직 없음: 지금은 칸이 비는 일(버리기, 사용)이 없어서. 그 기능을 만들 때 같이 넣음
 //   둘을 트랜잭션으로 묶지 않음: 중간에 서버가 죽으면 한쪽만 옛 값일 수 있지만, 둘 다 "덜 저장된" 쪽이라 복사(dupe)는 안 생김
 bool DBQueue::SaveCharacter(DBConnection& db, const CharacterData& data)
 {
 	if (UpdateCharacter(db, data) == false)
 		return false;
-	for (const ItemStack& item : data.items)
+	for (const ItemSlot& item : data.items)
 	{
 		if (UpsertItem(db, data.characterId, item) == false)
 			return false;
@@ -193,18 +195,19 @@ bool DBQueue::UpdateCharacter(DBConnection& db, const CharacterData& data)
 	return query.Execute();
 }
 
-// 있으면 개수만 바꾸고, 없으면 새 줄 (PK가 (character_id, item_id)라 한 문장으로)
+// 그 칸에 무엇이 몇 개인지 덮어씀: 줄이 있으면 고치고, 없으면 새 줄 (PK가 (character_id, slot)이라 한 문장으로)
 //   AS new: MySQL 8.0.19부터의 문법 (예전의 VALUES(count)는 앞으로 없어질 예정)
-bool DBQueue::UpsertItem(DBConnection& db, int64 characterId, const ItemStack& item)
+bool DBQueue::UpsertItem(DBConnection& db, int64 characterId, const ItemSlot& item)
 {
 	int64 id = characterId;		// BindParam이 바꿀 수 있는 변수의 주소를 받아서 복사본으로
-	ItemStack row = item;
+	ItemSlot row = item;
 
-	DBBind<3, 0> query(db,
-		L"INSERT INTO player_item (character_id, item_id, count) VALUES (?, ?, ?) AS new"
-		L" ON DUPLICATE KEY UPDATE count = new.count, updated_at = UTC_TIMESTAMP()");
+	DBBind<4, 0> query(db,
+		L"INSERT INTO player_inventory (character_id, slot, item_id, count) VALUES (?, ?, ?, ?) AS new"
+		L" ON DUPLICATE KEY UPDATE item_id = new.item_id, count = new.count, updated_at = UTC_TIMESTAMP()");
 	query.BindParam(0, id);
-	query.BindParam(1, row.itemId);
-	query.BindParam(2, row.count);
+	query.BindParam(1, row.slot);
+	query.BindParam(2, row.itemId);
+	query.BindParam(3, row.count);
 	return query.Execute();
 }

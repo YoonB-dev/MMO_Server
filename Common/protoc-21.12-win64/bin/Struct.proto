@@ -46,11 +46,12 @@ message CastInfo
 	float hit_angle = 6;	// 부채꼴 좌우 반각 (도)
 }
 
-// 인벤토리 한 칸 = 아이템 종류 하나와 개수
-message ItemCount
+// 인벤토리 한 칸
+message InventorySlot
 {
-	int32 item_id = 1;
-	int32 count = 2;
+	int32 slot = 1;		// 칸 번호 0 ~ S_ENTER_GAME.inventory_capacity - 1
+	int32 item_id = 2;
+	int32 count = 3;	// 1 ~ data_item.max_stack (한 칸에 쌓이는 최대 개수)
 }
 
 // 바닥에 떨어진 것 (ObjectInfo.object_type = DROP일 때만 있음)

@@ -10,6 +10,7 @@
 #include "GameData.h"
 #include "JwtVerifier.h"
 #include "DBQueue.h"
+#include "Player.h"	// Player::inventorySize (--inventory-size)
 
 std::atomic<int64> g_inboundPacketCount(0);
 std::atomic<int64> g_outboundPacketCount(0);
@@ -185,6 +186,21 @@ int32 ParseMaxDrops(int argc, char* argv[])
 	return count;
 }
 
+// GameServer.exe [--inventory-size N]  (인벤토리 칸 수, 기본 20. 테스트에서 작게 줘서 칸이 없으면 못 줍는지 확인)
+//   워커 스레드가 뜨기 전에 한 번만 바꿈 -> 이후 여러 스레드가 읽기만 해서 안전
+void ApplyInventorySize(int argc, char* argv[])
+{
+	for (int32 i = 1; i + 1 < argc; i++)
+	{
+		if (string(argv[i]) == "--inventory-size")
+		{
+			const int32 size = ::atoi(argv[i + 1]);
+			if (size > 0)
+				Player::inventorySize = size;
+		}
+	}
+}
+
 // GameServer.exe [--load-monsters N] [--load-area M]  (부하 테스트용 몬스터 N마리를 ±M m에 추가. 기본 0마리, 100m)
 void ApplyLoadMonsterOptions(int argc, char* argv[])
 {
@@ -233,6 +249,7 @@ int main(int argc, char* argv[])
 	GRoom->SetSaveInterval(ParseSaveIntervalSec(argc, argv));
 	GRoom->SetDropLifetime(ParseDropLifetimeSec(argc, argv));
 	GRoom->SetMaxDrops(ParseMaxDrops(argc, argv));
+	ApplyInventorySize(argc, argv);
 	ApplyLoadMonsterOptions(argc, argv);
 	GRoom->Start();
 

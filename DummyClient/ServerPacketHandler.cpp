@@ -204,9 +204,9 @@ bool Handle_S_ENTER_GAME(PacketSessionRef& session, Protocol::S_ENTER_GAME& pkt)
 		line << " pos=(" << pos.x() << ", " << pos.z() << ") hp=" << pkt.player().stat_info().hp();	// 저장된 캐릭터를 불러왔는지 확인용
 		line << " name=" << pkt.player().name() << " name_hex=" << HexOf(pkt.player().name());	// 한글 이름은 name_hex로 비교
 		line << " level=" << pkt.player().stat_info().level() << " exp=" << pkt.exp() << " next=" << pkt.exp_to_next();	// 저장된 레벨 / 경험치 확인용
-		line << " gold=" << pkt.gold() << " items=";	// 저장된 골드 / 인벤토리 확인용 (순서는 서버 map 순서라 일정하지 않음)
-		for (int32 i = 0; i < pkt.inventory_size(); i++)
-			line << (i > 0 ? "," : "") << pkt.inventory(i).item_id() << "x" << pkt.inventory(i).count();
+		line << " gold=" << pkt.gold() << " inv=" << pkt.inventory_capacity() << " items=";	// 저장된 골드 / 인벤토리 확인용 (칸:아이템x개수)
+		for (int32 i = 0; i < pkt.inventory_size(); i++)	// inventory_size() = repeated inventory의 개수 (protobuf가 만듦)
+			line << (i > 0 ? "," : "") << pkt.inventory(i).slot() << ":" << pkt.inventory(i).item_id() << "x" << pkt.inventory(i).count();
 	}
 	if (pkt.success() == false)
 		line << " error=" << pkt.error();	// Enum.proto EnterGameError (1 토큰 오류, 2 만료, 3 중복 요청, 4 서버 오류, 5 캐릭터 없음/남의 것)
@@ -684,7 +684,9 @@ bool Handle_S_CHANGE_GOLD(PacketSessionRef& session, Protocol::S_CHANGE_GOLD& pk
 bool Handle_S_CHANGE_ITEM(PacketSessionRef& session, Protocol::S_CHANGE_ITEM& pkt)
 {
 	ostringstream line;
-	line << "S_CHANGE_ITEM item=" << pkt.item_id() << " count=" << pkt.count() << " gained=" << pkt.gained();
+	line << "S_CHANGE_ITEM item=" << pkt.item_id() << " gained=" << pkt.gained() << " slots=";	// 바뀐 칸들 (칸:아이템x개수)
+	for (int32 i = 0; i < pkt.slots_size(); i++)
+		line << (i > 0 ? "," : "") << pkt.slots(i).slot() << ":" << pkt.slots(i).item_id() << "x" << pkt.slots(i).count();
 	Log(ClientIdOf(session), line.str());
 	return true;
 }

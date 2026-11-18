@@ -405,11 +405,15 @@ void Room::Enter(PlayerRef player)
 		pkt.set_exp(player->exp);			// 경험치도 본인만 (레벨은 player.stat_info에 이미 있음)
 		pkt.set_exp_to_next(GetExpToNext(player->GetLevel()));
 		pkt.set_gold(player->gold);			// 골드, 인벤토리도 본인만
-		for (auto& [itemId, count] : player->inventory)
+		pkt.set_inventory_capacity(Player::inventorySize);
+		for (const ItemSlot& s : player->inventory)
 		{
-			Protocol::ItemCount* item = pkt.add_inventory();
-			item->set_item_id(itemId);
-			item->set_count(count);
+			if (s.itemId == 0)
+				continue;	// 아이템이 있는 칸만 (빈 칸은 클라가 inventory_capacity로 그림)
+			Protocol::InventorySlot* out = pkt.add_inventory();
+			out->set_slot(s.slot);
+			out->set_item_id(s.itemId);
+			out->set_count(s.count);
 		}
 		SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
 	}
@@ -1050,7 +1054,8 @@ void Room::RemoveDrop(DropRef drop, uint64 pickerId)
 	_drops.erase(id);
 }
 
-// 이 드랍을 이 플레이어가 지금 가질 수 있나: 떨어지는 중이 아니고, 골드는 항상 / 아이템은 max_stack을 넘지 않을 때만
+// 이 드랍을 이 플레이어가 지금 가질 수 있나: 떨어지는 중이 아니고, 골드는 항상 / 아이템은 인벤토리 칸에 "다" 들어갈 때만
+//   일부만 들어가면 못 주움 (드랍은 통째로만 주인이 바뀜 -> 바닥 드랍의 개수가 바뀌는 일이 없음)
 static bool CanTake(Player& player, Drop& drop, uint64 now)
 {
 	if (now < drop.GetPickableTick())
@@ -1058,13 +1063,11 @@ static bool CanTake(Player& player, Drop& drop, uint64 now)
 
 	const Protocol::DropInfo& info = drop.GetObjectInfo().drop_info();
 	if (info.item_id() == 0)
-		return true;
+		return true;	// 골드는 칸을 안 씀
 	const ItemData* itemData = FindItemData(info.item_id());
 	if (itemData == nullptr)
 		return false;
-	auto it = player.inventory.find(info.item_id());
-	const int32 have = (it != player.inventory.end()) ? it->second : 0;
-	return have + info.amount() <= itemData->maxStack;
+	return player.CanAddItem(info.item_id(), info.amount(), itemData->maxStack);
 }
 
 // C_PICKUP: 주울 수 있는 드랍 중 가장 가까운 것 하나
@@ -1113,14 +1116,24 @@ void Room::GiveGold(const PlayerRef& player, int64 amount)
 	SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
 }
 
+// 인벤토리에 넣고 바뀐 칸들만 보냄 (CanTake가 "다 들어감"을 이미 확인함)
 void Room::GiveItem(const PlayerRef& player, int32 itemId, int32 amount)
 {
-	const int32 count = (player->inventory[itemId] += amount);	// 없던 아이템이면 0으로 만들어진 뒤 더해짐
+	const ItemData* itemData = FindItemData(itemId);	// CanTake에서 있는 걸 확인함
+	xvector<int32> changed;
+	player->AddItem(itemId, amount, itemData->maxStack, changed);
 
 	Protocol::S_CHANGE_ITEM pkt;
 	pkt.set_item_id(itemId);
-	pkt.set_count(count);
 	pkt.set_gained(amount);
+	for (const int32 slot : changed)
+	{
+		const ItemSlot& s = player->inventory[slot];
+		Protocol::InventorySlot* out = pkt.add_slots();
+		out->set_slot(s.slot);
+		out->set_item_id(s.itemId);
+		out->set_count(s.count);
+	}
 	SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
 }
 
