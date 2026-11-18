@@ -92,3 +92,15 @@ bool Handle_C_CHAT(PacketSessionRef& session, Protocol::C_CHAT& pkt)
 	GRoom->DoAsync(&Room::HandleChat, player, pkt.channel(), std::move(*pkt.mutable_message()));
 	return true;
 }
+
+bool Handle_C_PICKUP(PacketSessionRef& session, Protocol::C_PICKUP& pkt)
+{
+	GameSessionRef gameSession = static_pointer_cast<GameSession>(session);
+	PlayerRef player = gameSession->GetPlayer();
+	if (player == nullptr)
+		return false;	// 아직 입장 안 한 세션의 줍기
+
+	// 무엇을 주울지는 Room 줄에서 고름 (드랍 목록, 인벤토리는 Room 안에서만 만짐)
+	GRoom->DoAsync(&Room::HandlePickup, player);
+	return true;
+}

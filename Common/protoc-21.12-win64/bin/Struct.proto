@@ -46,6 +46,13 @@ message CastInfo
 	float hit_angle = 6;	// 부채꼴 좌우 반각 (도)
 }
 
+// 인벤토리 한 칸 = 아이템 종류 하나와 개수
+message ItemCount
+{
+	int32 item_id = 1;
+	int32 count = 2;
+}
+
 // 바닥에 떨어진 것 (ObjectInfo.object_type = DROP일 때만 있음)
 message DropInfo
 {

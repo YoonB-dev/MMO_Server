@@ -61,8 +61,9 @@ static bool LoadItems(DBConnection& db)
 {
 	ItemData row;
 
-	DBBind<0, 1> query(db, L"SELECT item_id FROM data_item");
+	DBBind<0, 2> query(db, L"SELECT item_id, max_stack FROM data_item");
 	query.BindCol(0, row.itemId);
+	query.BindCol(1, row.maxStack);
 
 	if (query.Execute() == false)
 		return false;

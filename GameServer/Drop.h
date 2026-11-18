@@ -7,8 +7,8 @@
 class Drop : public GameObject
 {
 public:
-	Drop(int32 itemId, int32 amount, float x, float z, uint64 expireTick)
-		: GameObject(Protocol::OBJECT_TYPE_DROP), _expireTick(expireTick)
+	Drop(int32 itemId, int32 amount, float x, float z, uint64 pickableTick, uint64 expireTick)
+		: GameObject(Protocol::OBJECT_TYPE_DROP), _pickableTick(pickableTick), _expireTick(expireTick)
 	{
 		GetPosInfo()->set_x(x);
 		GetPosInfo()->set_z(z);
@@ -17,8 +17,10 @@ public:
 		info->set_amount(amount);
 	}
 
+	uint64	GetPickableTick() const { return _pickableTick; }
 	uint64	GetExpireTick() const { return _expireTick; }
 
 private:
+	uint64	_pickableTick = 0;	// 이 틱부터 주울 수 있음 (떨어지는 연출 동안은 못 주움)
 	uint64	_expireTick = 0;	// 이 틱이 되면 사라짐
 };

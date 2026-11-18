@@ -43,6 +43,11 @@ class Room : public JobQueue
 	// 바닥 드랍
 	static constexpr int32	MAX_DROPS = 500;			// 방 전체 상한. 넘으면 가장 오래된 것부터 지움 (몬스터가 아주 많을 때 대비)
 	static constexpr float	DROP_SCATTER_RADIUS = 1.f;	// 몬스터 자리에서 이 반경 안에 흩뿌림 (m)
+	static constexpr uint64	DROP_PICKUP_DELAY_TICKS = 10;	// 떨어진 뒤 0.5초 동안 못 주움
+	//   이 사이에 UpdateView가 주변에 S_SPAWN을 보냄 -> 아무도 못 본 드랍을 줍는 일이 없음 (줍기 연타 매크로 포함)
+	// 줍기
+	static constexpr float	PICKUP_RANGE = 2.f;			// 이 거리 안의 드랍만 주움 (m). 서버 위치 기준 + SKILL_RANGE_SLACK
+	static constexpr uint64	PICKUP_COOLDOWN_TICKS = 4;	// 0.2초에 한 번 (키를 누르고 있어도 한 번에 하나씩)
 	// 채팅 제한
 	static constexpr int32	CHAT_MAX_CHARS = 100;		// 글자 수 (바이트 아님. 한글도 1글자)
 	static constexpr uint64	CHAT_COOLDOWN_TICKS = 10;	// 0.5초에 한 번
@@ -80,6 +85,7 @@ public:
 	void	HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 buttons, uint32 seq);
 	void	HandleSkill(PlayerRef player, int32 skillId, uint64 targetId);
 	void	HandleChat(PlayerRef player, Protocol::ChatChannel channel, string message);	// C_CHAT
+	void	HandlePickup(PlayerRef player);															// C_PICKUP
 
 	// 몬스터 AI가 쓰는 조회/알림 (Room JobQueue 안, 틱 도중에만 호출)
 	PlayerRef	FindPlayer(uint64 objectId);
@@ -96,7 +102,9 @@ private:
 	void	GiveExp(uint64 killerId, int32 amount);				// 처치 경험치: 처치자에게 S_CHANGE_EXP, 레벨업이면 주변에 S_LEVEL_UP
 	void	SpawnDrops(Monster& monster);						// 처치 드랍: 골드 한 더미 + 드랍표 확률 아이템을 몬스터 자리에
 	void	AddDrop(int32 itemId, int32 amount, float x, float z);	// 하나 만들기 (상한이면 가장 오래된 것부터 지움)
-	void	RemoveDrop(DropRef drop);							// 바닥에서 없애기: 보던 사람에게 S_DESPAWN
+	void	RemoveDrop(DropRef drop, uint64 pickerId = 0);		// 바닥에서 없애기: 보던 사람에게 S_DESPAWN (주운 거면 S_PICKUP)
+	void	GiveGold(const PlayerRef& player, int64 amount);	// 골드 더하기 + 본인에게 S_CHANGE_GOLD
+	void	GiveItem(const PlayerRef& player, int32 itemId, int32 amount);	// 아이템 더하기 + 본인에게 S_CHANGE_ITEM
 	void	ExpireDrops();										// 1초마다: 수명이 지난 드랍 제거
 	void	KillPlayer(const PlayerRef& player, uint64 killerId);	// 방에 남김(시체) + 정지 + S_DIE + 부활 예약
 	void	RevivePlayer(uint64 playerId);						// 부활 (KillPlayer의 DoTimer). id로 받음: 그사이 나갔으면 못 찾고 끝

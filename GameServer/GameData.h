@@ -7,10 +7,11 @@ struct SkillData;
 
 constexpr int32 MONSTER_SKILL_ID_BEGIN = 101;	// 이 번호부터는 몬스터 스킬 (플레이어 C_SKILL은 거절). skill.sql과 맞춤
 
-// data_item 한 줄. 이번에는 드랍표의 item_id가 진짜 있는지 확인하는 데만 씀
+// data_item 한 줄
 struct ItemData
 {
 	int32	itemId = 0;
+	int32	maxStack = 0;	// 한 캐릭터가 가질 수 있는 최대 개수 (넘으면 못 주움)
 };
 
 // data_monster_drop 한 줄: 몬스터가 죽을 때 이 아이템이 떨어질 확률과 개수

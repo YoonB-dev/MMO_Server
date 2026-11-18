@@ -58,6 +58,7 @@ extern bool GDodgeTest;	// --dodge-test: chase-test 후 나를 노린 몬스터 
 extern bool GDeathTest;	// --death-test: chase-test 후 몬스터에게 맞아 죽으면, 죽은 상태에서 이동/공격을 보냄 (거절 확인)
 extern bool GChatTest;	// --chat-test: 입장 후 거절될 채팅 3개(빈 문자열, 101글자, 줄바꿈) + 주변 "hello" + 바로 방 "again"(쿨타임 거절)
 extern bool GChatReply;	// --chat-reply: 다른 사람의 주변 채팅을 처음 받으면 방 전체로 "reply"
+extern bool GPickupTest;	// --pickup-test: S_PING(1초)마다 C_PICKUP (서버가 주울 게 있으면 가장 가까운 것을 줌)
 extern bool GBot;		// --bot: 부하 테스트용. ±GBotArea 안의 무작위 지점을 계속 돌아다니고, 받은 패킷마다 찍는 로그는 끔
 extern float GBotArea;	// --area: 봇이 돌아다니는 범위 (m, 기본 100 = 서버 월드 200x200 전체)
 extern std::vector<LoginInfo> GLogins;	// 클라 번호 순서의 입장 정보 (토큰 + 캐릭터, [0] = Client 1)

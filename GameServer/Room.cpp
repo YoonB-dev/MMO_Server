@@ -404,6 +404,13 @@ void Room::Enter(PlayerRef player)
 		pkt.set_max_mp(Player::MAX_MP);
 		pkt.set_exp(player->exp);			// 경험치도 본인만 (레벨은 player.stat_info에 이미 있음)
 		pkt.set_exp_to_next(GetExpToNext(player->GetLevel()));
+		pkt.set_gold(player->gold);			// 골드, 인벤토리도 본인만
+		for (auto& [itemId, count] : player->inventory)
+		{
+			Protocol::ItemCount* item = pkt.add_inventory();
+			item->set_item_id(itemId);
+			item->set_count(count);
+		}
 		SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
 	}
 
@@ -997,7 +1004,8 @@ void Room::AddDrop(int32 itemId, int32 amount, float x, float z)
 	const float angle = unit(_rng) * 6.2831853f;
 	const float radius = std::sqrt(unit(_rng)) * DROP_SCATTER_RADIUS;
 
-	DropRef drop = MakeShared<Drop>(itemId, amount, x + std::sin(angle) * radius, z + std::cos(angle) * radius, _tick + _dropLifetimeTicks);
+	DropRef drop = MakeShared<Drop>(itemId, amount, x + std::sin(angle) * radius, z + std::cos(angle) * radius,
+		_tick + DROP_PICKUP_DELAY_TICKS, _tick + _dropLifetimeTicks);
 	_drops[drop->GetObjectId()] = drop;
 	_grid.Add(drop);
 }
@@ -1005,12 +1013,24 @@ void Room::AddDrop(int32 itemId, int32 amount, float x, float z)
 // 바닥에서 없애기: 보던 사람에게 S_DESPAWN + 각자 visible에서 지움 (KillMonster의 S_DIE와 같은 순서)
 //   drop을 값(shared_ptr 복사)으로 받음: _drops.begin()->second를 참조로 받으면 아래 erase가 그 원본을 지워서
 //   함수 나머지에서 사라진 객체를 쓰게 됨. 복사본이 함수 끝까지 객체를 붙잡고 있음
-void Room::RemoveDrop(DropRef drop)
+//   pickerId: 누가 주웠으면 S_DESPAWN 대신 S_PICKUP (클라가 그 사람 쪽으로 빨려 가는 연출)
+void Room::RemoveDrop(DropRef drop, uint64 pickerId)
 {
 	const uint64 id = drop->GetObjectId();
-	Protocol::S_DESPAWN pkt;
-	pkt.add_object_ids(id);
-	SendBufferRef sendBuffer = ClientPacketHandler::MakeSendBuffer(pkt);
+	SendBufferRef sendBuffer;
+	if (pickerId != 0)
+	{
+		Protocol::S_PICKUP pkt;
+		pkt.set_drop_id(id);
+		pkt.set_picker_id(pickerId);
+		sendBuffer = ClientPacketHandler::MakeSendBuffer(pkt);
+	}
+	else
+	{
+		Protocol::S_DESPAWN pkt;
+		pkt.add_object_ids(id);
+		sendBuffer = ClientPacketHandler::MakeSendBuffer(pkt);
+	}
 	ForEachViewer(*drop, [&](const PlayerRef& viewer)
 		{
 			viewer->visible.erase(id);
@@ -1018,6 +1038,80 @@ void Room::RemoveDrop(DropRef drop)
 		});
 	_grid.Remove(drop);	// ForEachViewer가 끝난 뒤에 (도는 중에 칸 목록을 바꾸면 안 됨)
 	_drops.erase(id);
+}
+
+// 이 드랍을 이 플레이어가 지금 가질 수 있나: 떨어지는 중이 아니고, 골드는 항상 / 아이템은 max_stack을 넘지 않을 때만
+static bool CanTake(Player& player, Drop& drop, uint64 now)
+{
+	if (now < drop.GetPickableTick())
+		return false;	// 아직 떨어지는 중 (주변에 S_SPAWN이 나가기 전일 수 있음)
+
+	const Protocol::DropInfo& info = drop.GetObjectInfo().drop_info();
+	if (info.item_id() == 0)
+		return true;
+	const ItemData* itemData = FindItemData(info.item_id());
+	if (itemData == nullptr)
+		return false;
+	auto it = player.inventory.find(info.item_id());
+	const int32 have = (it != player.inventory.end()) ? it->second : 0;
+	return have + info.amount() <= itemData->maxStack;
+}
+
+// C_PICKUP: 주울 수 있는 드랍 중 가장 가까운 것 하나
+//   "먼저 줍는 사람이 가져감"은 따로 처리 안 함: 두 사람의 C_PICKUP이 이 줄에 차례로 들어오고,
+//   앞 요청이 드랍을 지운 뒤라 뒤 요청은 그 드랍을 못 찾음 (락도, 이미 주웠다는 표시도 필요 없음)
+void Room::HandlePickup(PlayerRef player)
+{
+	if (_players.count(player->GetObjectId()) == 0 || player->IsDead() || _tick < player->pickupReadyTick)
+		return;
+
+	const float x = player->GetPosInfo()->x();
+	const float z = player->GetPosInfo()->z();
+	const float range = PICKUP_RANGE + SKILL_RANGE_SLACK;
+	DropRef best;
+	float bestSq = range * range;
+	_grid.ForEachDrop(x, z, range, [&](const DropRef& drop)
+		{
+			const float distSq = DistSq(*drop, x, z);
+			if (distSq > bestSq || CanTake(*player, *drop, _tick) == false)
+				return;
+			best = drop;
+			bestSq = distSq;
+		});
+	if (best == nullptr)
+		return;		// 멀거나, 이미 누가 주웠거나, 가득 참 (응답 없음. 헛손질은 쿨타임도 안 씀)
+
+	player->pickupReadyTick = _tick + PICKUP_COOLDOWN_TICKS;
+	const Protocol::DropInfo& info = best->GetObjectInfo().drop_info();
+	if (info.item_id() == 0)
+		GiveGold(player, info.amount());
+	else
+		GiveItem(player, info.item_id(), info.amount());
+
+	LogLine() << "[Room] player " << player->GetObjectId() << " picked up drop " << best->GetObjectId()
+		<< " (item " << info.item_id() << " x" << info.amount() << ")";
+	RemoveDrop(best, player->GetObjectId());	// info는 best 안의 값이라 지우기 전에 다 씀
+}
+
+void Room::GiveGold(const PlayerRef& player, int64 amount)
+{
+	player->gold += amount;
+
+	Protocol::S_CHANGE_GOLD pkt;
+	pkt.set_gold(player->gold);
+	pkt.set_gained(amount);
+	SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
+}
+
+void Room::GiveItem(const PlayerRef& player, int32 itemId, int32 amount)
+{
+	const int32 count = (player->inventory[itemId] += amount);	// 없던 아이템이면 0으로 만들어진 뒤 더해짐
+
+	Protocol::S_CHANGE_ITEM pkt;
+	pkt.set_item_id(itemId);
+	pkt.set_count(count);
+	pkt.set_gained(amount);
+	SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
 }
 
 // 1초마다 (Tick): 수명이 모두 같아서 만료된 드랍은 _drops 앞쪽(오래된 쪽)에 모여 있음

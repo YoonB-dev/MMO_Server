@@ -6,7 +6,7 @@
 #include "AuthClient.h"
 
 // 접속 확인용 더미 클라이언트: N명이 아웃게임 서버에 로그인 -> 게임 서버에 접속해서 토큰으로 입장하고, 1초마다 C_PING -> S_PING 왕복 시간 출력
-//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--account-prefix dummy] [--auth-host localhost] [--auth-port 7100] [--token T] [--character-id N] [--no-ping] [--input-test] [--move-test] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test] [--ranged-test] [--dodge-test] [--death-test] [--chat-test] [--chat-reply] [--bot] [--area M]
+//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--account-prefix dummy] [--auth-host localhost] [--auth-port 7100] [--token T] [--character-id N] [--no-ping] [--input-test] [--move-test] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test] [--ranged-test] [--dodge-test] [--death-test] [--chat-test] [--chat-reply] [--pickup-test] [--bot] [--area M]
 //   부하 테스트(Test/Load/Run-Load.ps1)는 --bot --area 100 --no-ping
 //   인자 없이 실행하면 3명, 127.0.0.1:7777, ping 사용 (Test/Run-Test.ps1에서 옵션을 넘겨서 사용)
 static const int32 IOCP_THREAD_COUNT = 2;
@@ -35,6 +35,7 @@ struct ClientOptions
 	bool	deathTest = false;	// chaseTest 후 맞아 죽으면, 죽은 상태에서 이동/공격을 보냄
 	bool	chatTest = false;	// 입장 후 거절될 채팅 3개 + 주변 채팅 + 바로 방 채팅(쿨타임 거절)
 	bool	chatReply = false;	// 다른 사람의 주변 채팅을 처음 받으면 방 전체로 답장
+	bool	pickupTest = false;	// S_PING(1초)마다 줍기 키 (C_PICKUP)
 	bool	bot = false;		// 부하 테스트: 무작위 지점을 계속 돌아다님 + 패킷마다 찍는 로그 끔
 	float	area = 100.f;		// 봇이 돌아다니는 범위 ±area (m)
 };
@@ -100,6 +101,8 @@ ClientOptions ParseOptions(int argc, char* argv[])
 			options.chatTest = true;
 		else if (arg == "--chat-reply")
 			options.chatReply = true;
+		else if (arg == "--pickup-test")
+			options.pickupTest = true;
 		else if (arg == "--bot")
 			options.bot = true;
 		else if (arg == "--area" && hasValue)
@@ -130,6 +133,7 @@ int main(int argc, char* argv[])
 	GDeathTest = options.deathTest;
 	GChatTest = options.chatTest;
 	GChatReply = options.chatReply;
+	GPickupTest = options.pickupTest;
 	GBot = options.bot;
 	GBotArea = options.area;
 

@@ -11,7 +11,15 @@ struct MoveInput
 	uint32	seq = 0;		// 클라가 붙인 입력 번호 1, 2, 3 ...
 };
 
-// DB player_character 한 줄 (계정당 여러 캐릭터, 아웃게임 서버가 만듦). DB 큐가 불러와서 Player를 만들 때 씀
+// 인벤토리 한 칸 (DB player_item 한 줄)
+struct ItemStack
+{
+	int32	itemId = 0;
+	int32	count = 0;
+};
+
+// DB player_character 한 줄 + 그 캐릭터의 player_item 줄들 (계정당 여러 캐릭터, 아웃게임 서버가 만듦)
+//   DB 큐가 불러와서 Player를 만들 때, Room이 저장할 값을 복사해서 DB 큐에 넘길 때 씀
 struct CharacterData
 {
 	int64	characterId = 0;	// player_character PK (저장할 때 어느 줄인지)
@@ -22,6 +30,8 @@ struct CharacterData
 	int32	mp = 0;
 	int32	level = 1;
 	int64	exp = 0;			// 이번 레벨에서 쌓인 경험치
+	int64	gold = 0;
+	vector<ItemStack>	items;	// 인벤토리 전체 (불러올 때 채우고, 저장할 때 전부 UPSERT)
 	WCHAR	nickname[21] = {};	// 불러올 때만 채움 (게임 중에 안 바뀌어서 저장하지 않음). 최대 20글자 + 끝 0
 };
 
@@ -71,6 +81,17 @@ public:
 		const int64 need = GetExpToNext(level);
 		exp = (data.exp < 0 || need == 0) ? 0 : (data.exp >= need ? need - 1 : data.exp);
 
+		// 골드 / 인벤토리. 기획에서 지운 아이템(data_item에 없음)은 건너뜀 (DB 줄은 그대로 남음, 저장은 아는 것만 UPSERT)
+		//   개수는 max_stack까지 자름 (max_stack을 줄인 경우)
+		gold = (data.gold < 0) ? 0 : data.gold;
+		for (const ItemStack& item : data.items)
+		{
+			const ItemData* itemData = FindItemData(item.itemId);
+			if (itemData == nullptr || item.count <= 0)
+				continue;
+			inventory[item.itemId] = (item.count > itemData->maxStack) ? itemData->maxStack : item.count;
+		}
+
 		// 닉네임 WCHAR(UTF-16, DB에서 옴) -> UTF-8(protobuf string). 한글이 있어서 한 글자씩 자르면 깨짐
 		char utf8[64] = {};	// 최대 20글자 x 한 글자 최대 3바이트 + 끝 0
 		const int32 len = ::WideCharToMultiByte(CP_UTF8, 0, data.nickname, -1, utf8, sizeof(utf8), nullptr, nullptr);
@@ -83,7 +104,10 @@ public:
 	//   닉네임은 저장하지 않아서 비워 둠
 	CharacterData ToCharacterData()
 	{
-		return CharacterData{ _characterId, _accountId, GetPosInfo()->x(), GetPosInfo()->z(), GetStatInfo()->hp(), mp, GetLevel(), exp };
+		CharacterData data{ _characterId, _accountId, GetPosInfo()->x(), GetPosInfo()->z(), GetStatInfo()->hp(), mp, GetLevel(), exp, gold };
+		for (auto& [itemId, count] : inventory)
+			data.items.push_back(ItemStack{ itemId, count });
+		return data;
 	}
 
 	// 레벨은 StatInfo 한 곳에만 둠 (HP처럼). 따로 변수를 두면 두 값이 어긋날 수 있음
@@ -174,6 +198,11 @@ public:
 
 	// --- 성장 (Room의 JobQueue 안에서만 접근 -> 락 없음) ---
 	int64	exp = 0;	// 이번 레벨에서 쌓인 경험치 (본인만 보는 값이라 ObjectInfo 밖에. 레벨은 StatInfo)
+
+	// --- 재화 / 인벤토리 (Room의 JobQueue 안에서만 접근 -> 락 없음) ---
+	int64							gold = 0;
+	xunordered_map<int32, int32>	inventory;				// item_id -> 개수 (0개인 항목은 두지 않음)
+	uint64							pickupReadyTick = 0;	// 이 틱부터 다시 줍기 가능 (스패밍 방지)
 
 	// --- 시야 (Room의 JobQueue 안에서만 접근 -> 락 없음) ---
 	//   지금 이 클라에 보이는 객체 id -> 마지막으로 "시야 안"이라고 확인한 틱

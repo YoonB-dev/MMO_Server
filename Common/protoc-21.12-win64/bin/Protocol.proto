@@ -40,6 +40,8 @@ message S_ENTER_GAME
 	EnterGameError error = 5;	// success = false일 때 이유
 	int64 exp = 6;			// 내 경험치 (이번 레벨에서 쌓인 양). 본인만 보는 값
 	int64 exp_to_next = 7;	// 다음 레벨까지 필요한 양 (0 = 최대 레벨). 클라가 레벨표 없이 경험치 바를 그림
+	int64 gold = 8;						// 내 골드 (본인만)
+	repeated ItemCount inventory = 9;	// 내 인벤토리 전체 (본인만)
 }
 
 message S_SPAWN
@@ -160,4 +162,33 @@ message S_LEVEL_UP
 {
 	uint64 object_id = 1;
 	int32 level = 2;
+}
+
+// ==================== 줍기 ====================
+// 클라 -> 서버: 줍기 키. 무엇을 주울지는 서버가 고름 (내 주변에서 주울 수 있는 것 중 가장 가까운 것)
+//   주울 게 없으면(멀거나, 이미 누가 주웠거나, 가득 참) 응답 없음
+message C_PICKUP
+{
+}
+
+// 서버 -> 클라(그 드랍을 보던 사람): 누가 주웠음 -> 줍는 연출 후 드랍을 지움 (S_DESPAWN은 따로 안 옴)
+message S_PICKUP
+{
+	uint64 drop_id = 1;
+	uint64 picker_id = 2;
+}
+
+// 서버 -> 클라(본인만): 골드가 바뀜
+message S_CHANGE_GOLD
+{
+	int64 gold = 1;		// 바뀐 뒤 골드
+	int64 gained = 2;	// 이번에 바뀐 양 (표시용 "+12")
+}
+
+// 서버 -> 클라(본인만): 아이템 개수가 바뀜
+message S_CHANGE_ITEM
+{
+	int32 item_id = 1;
+	int32 count = 2;	// 바뀐 뒤 개수 (0이면 인벤토리에서 없어짐. 지금은 줄어드는 일이 없음)
+	int32 gained = 3;
 }

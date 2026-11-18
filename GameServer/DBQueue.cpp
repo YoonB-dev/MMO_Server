@@ -48,6 +48,8 @@ void DBQueue::LoadCharacter(GameSessionRef session, int64 accountId, int64 chara
 	{
 		DBConnectionGuard db(GDBConnectionPool);	// 블록이 끝나면 연결 반납
 		ok = db && SelectCharacter(db, accountId, characterId, data, found);
+		if (ok && found)
+			ok = SelectItems(db, characterId, data.items);	// 같은 연결로 이어서 (DBBind가 앞 문장의 커서를 닫고 시작)
 	}
 
 	if (ok == false)
@@ -79,7 +81,7 @@ void DBQueue::LeaveCharacter(CharacterData data)
 {
 	{
 		DBConnectionGuard db(GDBConnectionPool);
-		if (db && UpdateCharacter(db, data))
+		if (db && SaveCharacter(db, data))
 			LogLine() << "[DB] saved character on leave: account " << data.accountId;
 		else
 			LogLine() << "[DB] failed to save character: account " << data.accountId;
@@ -111,7 +113,7 @@ void DBQueue::SaveCharacters(xvector<CharacterData> rows)
 	int32 saved = 0;
 	for (const CharacterData& row : rows)
 	{
-		if (UpdateCharacter(db, row))
+		if (SaveCharacter(db, row))
 			saved++;
 	}
 	LogLine() << "[DB] saved " << saved << " character(s)";
@@ -123,7 +125,7 @@ bool DBQueue::SelectCharacter(DBConnection& db, int64 accountId, int64 character
 	out.characterId = characterId;
 
 	// account_id도 같이 봄 -> 토큰의 계정 캐릭터가 아니면 줄이 안 나옴 (남의 캐릭터로 입장 불가)
-	DBBind<2, 7> query(db, L"SELECT nickname, pos_x, pos_z, hp, mp, level, exp FROM player_character WHERE character_id = ? AND account_id = ?");
+	DBBind<2, 8> query(db, L"SELECT nickname, pos_x, pos_z, hp, mp, level, exp, gold FROM player_character WHERE character_id = ? AND account_id = ?");
 	query.BindParam(0, characterId);
 	query.BindParam(1, accountId);
 	query.BindCol(0, out.nickname);		// WCHAR[21] 배열 -> 템플릿이 크기(21)까지 같이 넘김
@@ -133,6 +135,7 @@ bool DBQueue::SelectCharacter(DBConnection& db, int64 accountId, int64 character
 	query.BindCol(4, out.mp);
 	query.BindCol(5, out.level);
 	query.BindCol(6, out.exp);
+	query.BindCol(7, out.gold);
 
 	if (query.Execute() == false)
 		return false;
@@ -141,17 +144,67 @@ bool DBQueue::SelectCharacter(DBConnection& db, int64 accountId, int64 character
 	return true;
 }
 
+// 인벤토리: 이 캐릭터의 player_item 줄 전부
+bool DBQueue::SelectItems(DBConnection& db, int64 characterId, vector<ItemStack>& out)
+{
+	ItemStack row;
+
+	DBBind<1, 2> query(db, L"SELECT item_id, count FROM player_item WHERE character_id = ?");
+	query.BindParam(0, characterId);
+	query.BindCol(0, row.itemId);
+	query.BindCol(1, row.count);
+
+	if (query.Execute() == false)
+		return false;
+
+	while (query.Fetch())
+		out.push_back(row);	// Fetch마다 row가 이번 줄 값으로 덮어써지므로 복사해서 넣음
+	return true;
+}
+
+// 저장 한 명: 캐릭터 줄 UPDATE + 아이템마다 UPSERT
+//   인벤토리는 전부 씀 (바뀐 것만 쓰면, 저장이 실패했을 때 그 변경이 다음 저장에서도 빠질 수 있음)
+//   둘을 트랜잭션으로 묶지 않음: 중간에 서버가 죽으면 한쪽만 옛 값일 수 있지만, 둘 다 "덜 저장된" 쪽이라 복사(dupe)는 안 생김
+bool DBQueue::SaveCharacter(DBConnection& db, const CharacterData& data)
+{
+	if (UpdateCharacter(db, data) == false)
+		return false;
+	for (const ItemStack& item : data.items)
+	{
+		if (UpsertItem(db, data.characterId, item) == false)
+			return false;
+	}
+	return true;
+}
+
 bool DBQueue::UpdateCharacter(DBConnection& db, const CharacterData& data)
 {
 	CharacterData row = data;	// BindParam은 값을 바꿀 수 있는 변수의 주소를 받아서 복사본으로
 
-	DBBind<7, 0> query(db, L"UPDATE player_character SET pos_x = ?, pos_z = ?, hp = ?, mp = ?, level = ?, exp = ?, updated_at = UTC_TIMESTAMP() WHERE character_id = ?");
+	DBBind<8, 0> query(db, L"UPDATE player_character SET pos_x = ?, pos_z = ?, hp = ?, mp = ?, level = ?, exp = ?, gold = ?, updated_at = UTC_TIMESTAMP() WHERE character_id = ?");
 	query.BindParam(0, row.x);
 	query.BindParam(1, row.z);
 	query.BindParam(2, row.hp);
 	query.BindParam(3, row.mp);
 	query.BindParam(4, row.level);
 	query.BindParam(5, row.exp);
-	query.BindParam(6, row.characterId);
+	query.BindParam(6, row.gold);
+	query.BindParam(7, row.characterId);
+	return query.Execute();
+}
+
+// 있으면 개수만 바꾸고, 없으면 새 줄 (PK가 (character_id, item_id)라 한 문장으로)
+//   AS new: MySQL 8.0.19부터의 문법 (예전의 VALUES(count)는 앞으로 없어질 예정)
+bool DBQueue::UpsertItem(DBConnection& db, int64 characterId, const ItemStack& item)
+{
+	int64 id = characterId;		// BindParam이 바꿀 수 있는 변수의 주소를 받아서 복사본으로
+	ItemStack row = item;
+
+	DBBind<3, 0> query(db,
+		L"INSERT INTO player_item (character_id, item_id, count) VALUES (?, ?, ?) AS new"
+		L" ON DUPLICATE KEY UPDATE count = new.count, updated_at = UTC_TIMESTAMP()");
+	query.BindParam(0, id);
+	query.BindParam(1, row.itemId);
+	query.BindParam(2, row.count);
 	return query.Execute();
 }
