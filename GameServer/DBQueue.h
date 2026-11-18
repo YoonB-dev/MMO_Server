@@ -3,7 +3,7 @@
 
 class DBConnection;
 struct CharacterData;
-struct ItemStack;
+struct ItemSlot;
 
 // DB 전용 줄. 게임 중에 DB를 부르는 일은 전부 여기로 DoAsync
 //   Room 줄은 DB를 기다리지 않음 (DB가 느려도 틱이 안 멈춤)
@@ -26,10 +26,12 @@ public:
 
 private:
 	static bool	SelectCharacter(DBConnection& db, int64 accountId, int64 characterId, CharacterData& out, bool& found);
-	static bool	SelectItems(DBConnection& db, int64 characterId, vector<ItemStack>& out);
-	static bool	SaveCharacter(DBConnection& db, const CharacterData& data);		// UpdateCharacter + 아이템마다 UpsertItem
+	static bool	SelectItems(DBConnection& db, int64 characterId, vector<ItemSlot>& out);
+	static bool	SaveCharacter(DBConnection& db, const CharacterData& data);		// 한 트랜잭션: UpdateCharacter + UpsertItem + DeleteEmptySlots
+	static bool	ExecuteRaw(DBConnection& db, const WCHAR* sql);					// START TRANSACTION / COMMIT / ROLLBACK
+	static bool	DeleteEmptySlots(DBConnection& db, const CharacterData& data);
 	static bool	UpdateCharacter(DBConnection& db, const CharacterData& data);
-	static bool	UpsertItem(DBConnection& db, int64 characterId, const ItemStack& item);
+	static bool	UpsertItem(DBConnection& db, int64 characterId, const ItemSlot& item);
 
 private:
 	// 옛 세션의 저장을 기다리는 새 로그인: 세션 + 어느 캐릭터로 들어오려 했는지 (옛 세션과 다른 캐릭터일 수 있음)

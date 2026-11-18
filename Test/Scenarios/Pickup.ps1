@@ -14,15 +14,15 @@ Assert-LogCount -Name server -Pattern 'picked up drop' -Expected 3	# 같은 드�
 Assert-LogCount -Name A -Pattern 'S_CHANGE_GOLD gold=\d+ gained=' -Expected 1		# 골드 더미는 한 명만
 Assert-LogCount -Name A -Pattern "S_CHANGE_GOLD gold=$gold gained=$gold" -Expected 1
 Assert-LogCount -Name A -Pattern 'S_CHANGE_ITEM item=1001 ' -Expected 1			# 젤리, 검 각각 한 명만
-Assert-LogCount -Name A -Pattern 'S_CHANGE_ITEM item=2001 count=1 gained=1' -Expected 1
+Assert-LogCount -Name A -Pattern 'S_CHANGE_ITEM item=2001 gained=1 slots=\d+:2001x1$' -Expected 1	# 칸 하나에 1개 (같은 사람이 젤리를 먼저 주웠으면 1번 칸)
 
 # 저장: 끊으면 나갈 때 저장 -> 같은 계정(같은 캐릭터)으로 다시 들어오면 그대로
 Stop-DummyClients -Name A
 Wait-LogCount -Name server -Pattern 'saved character on leave' -Expected 4
 Start-DummyClients -Name B -Count 4 -Arguments '--no-ping' -AccountOf A
 Wait-LogCount -Name B -Pattern 'S_ENTER_GAME success=1' -Expected 4
-Assert-LogCount -Name B -Pattern "S_ENTER_GAME success=1 .* gold=$gold items=" -Expected 1
-Assert-LogCount -Name B -Pattern 'S_ENTER_GAME success=1 .* gold=0 items=' -Expected 3
+Assert-LogCount -Name B -Pattern "S_ENTER_GAME success=1 .* gold=$gold inv=\d+ items=" -Expected 1
+Assert-LogCount -Name B -Pattern 'S_ENTER_GAME success=1 .* gold=0 inv=\d+ items=' -Expected 3
 Assert-LogCount -Name B -Pattern 'S_ENTER_GAME success=1 .* items=.*1001x[12]' -Expected 1
 Assert-LogCount -Name B -Pattern 'S_ENTER_GAME success=1 .* items=.*2001x1' -Expected 1
 Assert-ServerAlive

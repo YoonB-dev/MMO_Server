@@ -405,11 +405,15 @@ void Room::Enter(PlayerRef player)
 		pkt.set_exp(player->exp);			// 경험치도 본인만 (레벨은 player.stat_info에 이미 있음)
 		pkt.set_exp_to_next(GetExpToNext(player->GetLevel()));
 		pkt.set_gold(player->gold);			// 골드, 인벤토리도 본인만
-		for (auto& [itemId, count] : player->inventory)
+		pkt.set_inventory_capacity(Player::inventorySize);
+		for (const ItemSlot& s : player->inventory)
 		{
-			Protocol::ItemCount* item = pkt.add_inventory();
-			item->set_item_id(itemId);
-			item->set_count(count);
+			if (s.itemId == 0)
+				continue;	// 아이템이 있는 칸만 (빈 칸은 클라가 inventory_capacity로 그림)
+			Protocol::InventorySlot* out = pkt.add_inventory();
+			out->set_slot(s.slot);
+			out->set_item_id(s.itemId);
+			out->set_count(s.count);
 		}
 		SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
 	}
@@ -1050,7 +1054,8 @@ void Room::RemoveDrop(DropRef drop, uint64 pickerId)
 	_drops.erase(id);
 }
 
-// 이 드랍을 이 플레이어가 지금 가질 수 있나: 떨어지는 중이 아니고, 골드는 항상 / 아이템은 max_stack을 넘지 않을 때만
+// 이 드랍을 이 플레이어가 지금 가질 수 있나: 떨어지는 중이 아니고, 골드는 항상 / 아이템은 인벤토리 칸에 "다" 들어갈 때만
+//   일부만 들어가면 못 주움 (드랍은 통째로만 주인이 바뀜 -> 바닥 드랍의 개수가 바뀌는 일이 없음)
 static bool CanTake(Player& player, Drop& drop, uint64 now)
 {
 	if (now < drop.GetPickableTick())
@@ -1058,13 +1063,11 @@ static bool CanTake(Player& player, Drop& drop, uint64 now)
 
 	const Protocol::DropInfo& info = drop.GetObjectInfo().drop_info();
 	if (info.item_id() == 0)
-		return true;
+		return true;	// 골드는 칸을 안 씀
 	const ItemData* itemData = FindItemData(info.item_id());
 	if (itemData == nullptr)
 		return false;
-	auto it = player.inventory.find(info.item_id());
-	const int32 have = (it != player.inventory.end()) ? it->second : 0;
-	return have + info.amount() <= itemData->maxStack;
+	return player.CanAddItem(info.item_id(), info.amount(), itemData->maxStack);
 }
 
 // C_PICKUP: 주울 수 있는 드랍 중 가장 가까운 것 하나
@@ -1113,14 +1116,83 @@ void Room::GiveGold(const PlayerRef& player, int64 amount)
 	SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
 }
 
+// 인벤토리에 넣고 바뀐 칸들만 보냄 (CanTake가 "다 들어감"을 이미 확인함)
 void Room::GiveItem(const PlayerRef& player, int32 itemId, int32 amount)
 {
-	const int32 count = (player->inventory[itemId] += amount);	// 없던 아이템이면 0으로 만들어진 뒤 더해짐
+	const ItemData* itemData = FindItemData(itemId);	// CanTake에서 있는 걸 확인함
+	xvector<int32> changed;
+	player->AddItem(itemId, amount, itemData->maxStack, changed);
 
 	Protocol::S_CHANGE_ITEM pkt;
 	pkt.set_item_id(itemId);
-	pkt.set_count(count);
 	pkt.set_gained(amount);
+	for (const int32 slot : changed)
+	{
+		const ItemSlot& s = player->inventory[slot];
+		Protocol::InventorySlot* out = pkt.add_slots();
+		out->set_slot(s.slot);
+		out->set_item_id(s.itemId);
+		out->set_count(s.count);
+	}
+	SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
+}
+
+// C_MOVE_ITEM: Room 줄에서 한 번에 하나씩 -> 옮기는 중간에 줍기가 끼어들지 않음 (원자적, 락 없음)
+//   아이템 수는 항상 그대로: 합치기는 +put / -put, 나머지는 두 칸의 내용 바꾸기라 생기거나 사라지는 경로가 없음
+void Room::HandleMoveItem(PlayerRef player, int32 from, int32 to)
+{
+	if (_players.count(player->GetObjectId()) == 0)
+		return;
+
+	const int32 size = Player::inventorySize;
+	if (from < 0 || from >= size || to < 0 || to >= size)
+	{
+		LogLine() << "[Room] reject item move: player " << player->GetObjectId() << ", out of range";
+		return;		// 칸 번호부터 틀림 -> 되돌릴 칸도 없음
+	}
+
+	// 참조: 복사본이 아니라 인벤토리 안의 칸 자체 -> 아래에서 바꾸면 실제 인벤토리가 바뀜
+	ItemSlot& src = player->inventory[from];
+	ItemSlot& dst = player->inventory[to];
+	if (from == to || src.itemId == 0)
+	{
+		LogLine() << "[Room] reject item move: player " << player->GetObjectId() << ", " << (from == to ? "same slot" : "empty slot");
+		SendSlots(player, from, to);	// 클라가 미리 바꿔 둔 화면을 서버 값으로 되돌림
+		return;
+	}
+
+	const int32 maxStack = FindItemData(src.itemId)->maxStack;	// 인벤토리에는 data_item에 있는 아이템만 들어 있음 (불러올 때 걸러짐)
+	if (dst.itemId == src.itemId && dst.count < maxStack)
+	{
+		// 같은 아이템, 자리 남음 -> 합침. 넘치면 from에 남음
+		const int32 space = maxStack - dst.count;
+		const int32 put = (src.count < space) ? src.count : space;
+		dst.count += put;
+		src.count -= put;
+		if (src.count == 0)
+			src.itemId = 0;		// 다 옮겨졌으면 빈 칸
+	}
+	else
+	{
+		// 빈 칸이면 옮김, 다른 아이템(또는 같은 아이템인데 가득)이면 서로 바꿈
+		//   빈 칸은 itemId 0, count 0이라 "내용 바꾸기" 하나로 둘 다 됨. 칸 번호(slot)는 그대로 둠
+		std::swap(src.itemId, dst.itemId);
+		std::swap(src.count, dst.count);
+	}
+	SendSlots(player, from, to);
+}
+
+void Room::SendSlots(const PlayerRef& player, int32 slotA, int32 slotB)
+{
+	Protocol::S_INVENTORY_SLOTS pkt;
+	for (const int32 slot : { slotA, slotB })
+	{
+		const ItemSlot& s = player->inventory[slot];
+		Protocol::InventorySlot* out = pkt.add_slots();
+		out->set_slot(s.slot);
+		out->set_item_id(s.itemId);
+		out->set_count(s.count);
+	}
 	SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
 }
 

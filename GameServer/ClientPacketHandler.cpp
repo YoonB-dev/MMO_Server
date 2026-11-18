@@ -104,3 +104,15 @@ bool Handle_C_PICKUP(PacketSessionRef& session, Protocol::C_PICKUP& pkt)
 	GRoom->DoAsync(&Room::HandlePickup, player);
 	return true;
 }
+
+bool Handle_C_MOVE_ITEM(PacketSessionRef& session, Protocol::C_MOVE_ITEM& pkt)
+{
+	GameSessionRef gameSession = static_pointer_cast<GameSession>(session);
+	PlayerRef player = gameSession->GetPlayer();
+	if (player == nullptr)
+		return false;	// 아직 입장 안 한 세션
+
+	// 칸 검사와 옮기기는 Room 줄에서 (인벤토리는 Room 안에서만 만짐 -> 줍기와 섞이지 않음)
+	GRoom->DoAsync(&Room::HandleMoveItem, player, pkt.from_slot(), pkt.to_slot());
+	return true;
+}

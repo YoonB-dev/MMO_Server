@@ -87,6 +87,7 @@ public:
 	void	HandleSkill(PlayerRef player, int32 skillId, uint64 targetId);
 	void	HandleChat(PlayerRef player, Protocol::ChatChannel channel, string message);	// C_CHAT
 	void	HandlePickup(PlayerRef player);															// C_PICKUP
+	void	HandleMoveItem(PlayerRef player, int32 from, int32 to);									// C_MOVE_ITEM
 
 	// 몬스터 AI가 쓰는 조회/알림 (Room JobQueue 안, 틱 도중에만 호출)
 	PlayerRef	FindPlayer(uint64 objectId);
@@ -106,6 +107,7 @@ private:
 	void	RemoveDrop(DropRef drop, uint64 pickerId = 0);		// 바닥에서 없애기: 보던 사람에게 S_DESPAWN (주운 거면 S_PICKUP)
 	void	GiveGold(const PlayerRef& player, int64 amount);	// 골드 더하기 + 본인에게 S_CHANGE_GOLD
 	void	GiveItem(const PlayerRef& player, int32 itemId, int32 amount);	// 아이템 더하기 + 본인에게 S_CHANGE_ITEM
+	void	SendSlots(const PlayerRef& player, int32 slotA, int32 slotB);	// 두 칸의 지금 상태를 본인에게 S_INVENTORY_SLOTS
 	void	ExpireDrops();										// 1초마다: 수명이 지난 드랍 제거
 	void	KillPlayer(const PlayerRef& player, uint64 killerId);	// 방에 남김(시체) + 정지 + S_DIE + 부활 예약
 	void	RevivePlayer(uint64 playerId);						// 부활 (KillPlayer의 DoTimer). id로 받음: 그사이 나갔으면 못 찾고 끝

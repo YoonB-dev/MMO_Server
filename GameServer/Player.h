@@ -11,14 +11,15 @@ struct MoveInput
 	uint32	seq = 0;		// 클라가 붙인 입력 번호 1, 2, 3 ...
 };
 
-// 인벤토리 한 칸 (DB player_item 한 줄)
-struct ItemStack
+// 인벤토리 한 칸 (DB player_inventory 한 줄). itemId 0 = 빈 칸
+struct ItemSlot
 {
+	int32	slot = 0;		// 칸 번호 0 ~ inventorySize - 1
 	int32	itemId = 0;
-	int32	count = 0;
+	int32	count = 0;		// 1 ~ max_stack (빈 칸이면 0)
 };
 
-// DB player_character 한 줄 + 그 캐릭터의 player_item 줄들 (계정당 여러 캐릭터, 아웃게임 서버가 만듦)
+// DB player_character 한 줄 + 그 캐릭터의 player_inventory 줄들 (계정당 여러 캐릭터, 아웃게임 서버가 만듦)
 //   DB 큐가 불러와서 Player를 만들 때, Room이 저장할 값을 복사해서 DB 큐에 넘길 때 씀
 struct CharacterData
 {
@@ -31,7 +32,7 @@ struct CharacterData
 	int32	level = 1;
 	int64	exp = 0;			// 이번 레벨에서 쌓인 경험치
 	int64	gold = 0;
-	vector<ItemStack>	items;	// 인벤토리 전체 (불러올 때 채우고, 저장할 때 전부 UPSERT)
+	vector<ItemSlot>	items;	// 아이템이 있는 칸들 (불러올 때 채우고, 저장할 때 전부 UPSERT)
 	WCHAR	nickname[21] = {};	// 불러올 때만 채움 (게임 중에 안 바뀌어서 저장하지 않음). 최대 20글자 + 끝 0
 };
 
@@ -54,6 +55,11 @@ public:
 	static constexpr uint64	REVIVE_DELAY_MS = 5000;	// 죽고 나서 부활까지 (DoTimer 시간이라 uint64)
 	static constexpr float	SPAWN_X = 0.f;			// 입장, 부활 위치
 	static constexpr float	SPAWN_Z = 0.f;
+
+	// 인벤토리 칸 수. 클래스 안의 전역 값 하나 (inline static: 헤더에 쓴 것으로 정의까지 끝남, C++17)
+	//   main에서 서버가 뜨기 전에 한 번 정하고(--inventory-size) 이후 읽기만 함 -> 여러 스레드가 읽어도 안전
+	static constexpr int32	DEFAULT_INVENTORY_SIZE = 20;
+	inline static int32		inventorySize = DEFAULT_INVENTORY_SIZE;
 
 	// Regen()의 결과: 실제로 바뀐 것만 true (꽉 차 있으면 false -> Room이 패킷을 안 보냄)
 	struct RegenResult
@@ -81,15 +87,21 @@ public:
 		const int64 need = GetExpToNext(level);
 		exp = (data.exp < 0 || need == 0) ? 0 : (data.exp >= need ? need - 1 : data.exp);
 
-		// 골드 / 인벤토리. 기획에서 지운 아이템(data_item에 없음)은 건너뜀 (DB 줄은 그대로 남음, 저장은 아는 것만 UPSERT)
+		// 골드 / 인벤토리: 칸 inventorySize개를 빈 칸으로 만든 뒤, DB 줄을 그 칸 번호에 넣음
+		//   건너뜀: 칸 번호가 범위 밖(칸 수를 줄인 경우), 기획에서 지운 아이템(data_item에 없음), 개수 0 이하
+		//   (건너뛴 DB 줄은 그대로 남음. 저장은 서버가 아는 칸만 UPSERT)
 		//   개수는 max_stack까지 자름 (max_stack을 줄인 경우)
 		gold = (data.gold < 0) ? 0 : data.gold;
-		for (const ItemStack& item : data.items)
+		inventory.resize(inventorySize);
+		for (int32 i = 0; i < inventorySize; i++)
+			inventory[i].slot = i;
+		for (const ItemSlot& item : data.items)
 		{
 			const ItemData* itemData = FindItemData(item.itemId);
-			if (itemData == nullptr || item.count <= 0)
+			if (item.slot < 0 || item.slot >= inventorySize || itemData == nullptr || item.count <= 0)
 				continue;
-			inventory[item.itemId] = (item.count > itemData->maxStack) ? itemData->maxStack : item.count;
+			inventory[item.slot].itemId = item.itemId;
+			inventory[item.slot].count = (item.count > itemData->maxStack) ? itemData->maxStack : item.count;
 		}
 
 		// 닉네임 WCHAR(UTF-16, DB에서 옴) -> UTF-8(protobuf string). 한글이 있어서 한 글자씩 자르면 깨짐
@@ -105,9 +117,60 @@ public:
 	CharacterData ToCharacterData()
 	{
 		CharacterData data{ _characterId, _accountId, GetPosInfo()->x(), GetPosInfo()->z(), GetStatInfo()->hp(), mp, GetLevel(), exp, gold };
-		for (auto& [itemId, count] : inventory)
-			data.items.push_back(ItemStack{ itemId, count });
+		for (const ItemSlot& s : inventory)
+		{
+			if (s.itemId != 0)
+				data.items.push_back(s);	// 아이템이 있는 칸만
+		}
 		return data;
+	}
+
+	// 다 들어갈 자리가 있나 (바꾸지 않고 세기만): 같은 아이템 칸의 남은 자리 + 빈 칸 x maxStack
+	//   드랍은 통째로만 주움 -> 이게 true일 때만 AddItem
+	bool CanAddItem(int32 itemId, int32 amount, int32 maxStack) const
+	{
+		int32 room = 0;
+		for (const ItemSlot& s : inventory)
+		{
+			if (s.itemId == itemId)
+				room += maxStack - s.count;
+			else if (s.itemId == 0)
+				room += maxStack;
+			if (room >= amount)
+				return true;
+		}
+		return false;
+	}
+
+	// 넣기 (CanAddItem이 true일 때만 부름): 1) 같은 아이템 칸을 maxStack까지 채움 2) 남으면 빈 칸에 번호 순서대로 새로 쌓음
+	//   바뀐 칸 번호를 changed에 담음 -> Room이 S_CHANGE_ITEM으로 그 칸들만 보냄
+	//   (std::min은 Windows.h의 min 매크로와 부딪혀서 삼항 연산자로)
+	void AddItem(int32 itemId, int32 amount, int32 maxStack, xvector<int32>& changed)
+	{
+		for (ItemSlot& s : inventory)
+		{
+			if (amount == 0)
+				return;
+			if (s.itemId != itemId || s.count >= maxStack)
+				continue;
+			const int32 space = maxStack - s.count;
+			const int32 put = (amount < space) ? amount : space;
+			s.count += put;
+			amount -= put;
+			changed.push_back(s.slot);
+		}
+		for (ItemSlot& s : inventory)
+		{
+			if (amount == 0)
+				return;
+			if (s.itemId != 0)
+				continue;
+			const int32 put = (amount < maxStack) ? amount : maxStack;
+			s.itemId = itemId;
+			s.count = put;
+			amount -= put;
+			changed.push_back(s.slot);
+		}
 	}
 
 	// 레벨은 StatInfo 한 곳에만 둠 (HP처럼). 따로 변수를 두면 두 값이 어긋날 수 있음
@@ -200,9 +263,9 @@ public:
 	int64	exp = 0;	// 이번 레벨에서 쌓인 경험치 (본인만 보는 값이라 ObjectInfo 밖에. 레벨은 StatInfo)
 
 	// --- 재화 / 인벤토리 (Room의 JobQueue 안에서만 접근 -> 락 없음) ---
-	int64							gold = 0;
-	xunordered_map<int32, int32>	inventory;				// item_id -> 개수 (0개인 항목은 두지 않음)
-	uint64							pickupReadyTick = 0;	// 이 틱부터 다시 줍기 가능 (스패밍 방지)
+	int64				gold = 0;
+	xvector<ItemSlot>	inventory;				// [칸 번호] = 그 칸 (크기 inventorySize, 빈 칸은 itemId 0)
+	uint64				pickupReadyTick = 0;	// 이 틱부터 다시 줍기 가능 (스패밍 방지)
 
 	// --- 시야 (Room의 JobQueue 안에서만 접근 -> 락 없음) ---
 	//   지금 이 클라에 보이는 객체 id -> 마지막으로 "시야 안"이라고 확인한 틱

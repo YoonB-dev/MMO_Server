@@ -15,6 +15,7 @@ bool GDeathTest = false;
 bool GChatTest = false;
 bool GChatReply = false;
 bool GPickupTest = false;
+bool GMoveItemTest = false;
 bool GBot = false;
 float GBotArea = 100.f;
 std::vector<LoginInfo> GLogins;
