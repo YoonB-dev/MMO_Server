@@ -714,6 +714,10 @@ bool Handle_S_CHANGE_HP(PacketSessionRef& session, Protocol::S_CHANGE_HP& pkt)
 		<< " damage=" << pkt.damage() << " attacker=" << pkt.attacker_id();
 	if (GBot == false)
 		Log(ClientIdOf(session), line.str());
+
+	// --bot-attack: 다들 멈춰 있으면 S_MOVE가 거의 안 옴 -> 때릴 때마다 오는 보스 HP 패킷에서도 공격 판단 (쿨타임은 UpdateBossBot이 지킴)
+	if (GBotAttack)
+		UpdateBot(session);
 	return true;
 }
 

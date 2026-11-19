@@ -213,9 +213,9 @@ void Room::LogStats(uint64 now)
 			<< ", view changes +" << _viewSpawned << " -" << _viewDespawned;	// 10초 동안 새로 보임 / 안 보이게 됨 (상한 경계 교체가 잦으면 커짐)
 	}
 
-	// 스킬 명중: 이 구간에 하나라도 있었을 때만 (보스 부하 테스트에서 봇이 실제로 때리고 있는지 확인)
+	// 스킬 명중 + 스킬 처리 시간: 이 구간에 명중이 하나라도 있었을 때만 (보스 부하 테스트에서 봇이 실제로 때리는지, 그 비용이 얼마인지)
 	if (_skillHits > 0)
-		LogLine() << "[Room] skill hits " << _skillHits;
+		LogLine() << "[Room] skill hits " << _skillHits << ", skill work " << (_skillWorkUs / 1000.0) << " ms";
 
 	// 스킬 거절 / 빗나감: 이 구간에 하나라도 있었을 때만 출력
 	//   거절은 정상 플레이에서 거의 0 (핵 의심용), 빗나감은 허공 공격이라 정상 플레이에서도 생김
@@ -244,6 +244,7 @@ void Room::LogStats(uint64 now)
 	_viewSpawned = 0;
 	_viewDespawned = 0;
 	_skillHits = 0;
+	_skillWorkUs = 0;
 	_skillRejects = {};
 	_skillMisses = {};
 }
@@ -677,8 +678,19 @@ void Room::HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 butt
 //   1~3에 걸리면 거절: 이유별 횟수만 세고 끝 (클라에는 아무것도 안 보냄, 쿨타임/MP 안 씀)
 //   4~6에 걸리면 대상 필수 스킬은 거절, 아니면 빗나감 (S_SKILL target 0, 쿨타임은 씀)
 //   통과하면 쿨타임과 MP를 쓰고 S_SKILL -> 맞았으면 데미지
+// 범위({ })가 끝날 때 소멸자가 걸린 시간을 total에 더함 (RAII: 중간에 return해도 소멸자는 반드시 불림)
+struct ScopedTimerUs
+{
+	uint64&	total;
+	chrono::steady_clock::time_point	start = chrono::steady_clock::now();
+	~ScopedTimerUs() { total += chrono::duration_cast<chrono::microseconds>(chrono::steady_clock::now() - start).count(); }
+};
+
 void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 {
+	// 이 함수 전체(브로드캐스트 포함)에 쓴 시간. 틱 밖의 잡이라 work에 안 잡혀서 따로 셈
+	ScopedTimerUs timer{ _skillWorkUs };
+
 	// 요청이 줄에서 기다리는 사이 이미 Leave가 처리된 플레이어
 	if (_players.find(player->GetObjectId()) == _players.end())
 		return;

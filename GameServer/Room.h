@@ -198,6 +198,7 @@ private:
 	uint64	_viewSpawned = 0;		// UpdateView에서 S_SPAWN에 넣은 항목 수 (새로 보이게 됨: 상한 안으로 들어옴 + 반경 안으로 들어옴)
 	uint64	_viewDespawned = 0;		// UpdateView에서 S_DESPAWN에 넣은 항목 수 (안 보이게 됨: 상한 밖으로 밀림 + 반경 밖으로 나감)
 	uint64	_skillHits = 0;			// 플레이어 스킬이 몬스터를 맞힌 횟수 (HandleSkill -> HitMonster)
+	uint64	_skillWorkUs = 0;		// HandleSkill에 쓴 시간 (틱 밖에서 도는 잡이라 work에 안 잡힘. 보스전에서 브로드캐스트 비용을 보려고)
 	SkillRejectStats	_skillRejects;	// 스킬 요청 거절 이유별 횟수
 	TargetFailStats		_skillMisses;	// 빗나감 이유별 횟수 (S_SKILL target 0으로 나간 것)
 };

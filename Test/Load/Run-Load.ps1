@@ -91,7 +91,7 @@ if ($dirty) { Write-Host 'WARNING: uncommitted changes - this result cannot be t
 $roomPattern = '\[Room\] tick (\d+), avg interval ([\d.e+-]+)ms, work avg ([\d.e+-]+)ms max ([\d.e+-]+)ms, ' +
                'monster moves (\d+) \([^)]*\), players (\d+), monsters (\d+), sent (\d+) packets (\d+) KB'
 
-$hitPattern = '\[Room\] skill hits (\d+)'   # 플레이어 스킬 명중 수 (10초 구간, 0이면 안 찍힘)
+$hitPattern = '\[Room\] skill hits (\d+), skill work ([\d.e+-]+) ms'   # 플레이어 스킬 명중 수와 HandleSkill 처리 시간 (10초 구간, 명중 0이면 안 찍힘)
 
 $samples   = New-Object System.Collections.Generic.List[object]
 $roomRows  = @()
@@ -167,7 +167,7 @@ try
         }
     })
     $hitRows = @(Get-Content $serverLog | Select-Object -Skip $skipLines | ForEach-Object {
-        if ($_ -match $hitPattern) { [double]$Matches[1] }
+        if ($_ -match $hitPattern) { [pscustomobject]@{ Hits = [double]$Matches[1]; WorkMs = [double]$Matches[2] } }
     })
 }
 finally
@@ -218,8 +218,10 @@ $summary += ''
 if ($Boss)
 {
     # [Room] 줄과 같은 10초 구간 (results.csv에는 열이 없어서 summary에만)
-    $hitsPerSec = if ($roomSec) { [math]::Round(($hitRows | Measure-Object -Sum).Sum / $roomSec) } else { 0 }
+    $hitsPerSec   = if ($roomSec) { [math]::Round(($hitRows.Hits | Measure-Object -Sum).Sum / $roomSec) } else { 0 }
+    $skillMsPerSec = if ($roomSec) { Round2 (($hitRows.WorkMs | Measure-Object -Sum).Sum / $roomSec) } else { 0 }
     $summary += "skill hits/s           $hitsPerSec (boss fight: player basic attacks that hit)"
+    $summary += "skill work ms/s        $skillMsPerSec (time in HandleSkill per second, outside the tick work; 1000 = Room thread busy all the time)"
     $summary += ''
 }
 $summary += "[Room] lines used ($($roomRows.Count), each = 10 s; the first one may start up to 10 s before the measure window):"
