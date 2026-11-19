@@ -186,6 +186,19 @@ int32 ParseMaxDrops(int argc, char* argv[])
 	return count;
 }
 
+// GameServer.exe [--max-visible-players N]  (한 명이 보는 다른 플레이어 상한, 기본 50. 테스트에서 작게)
+//   안 주면 0 -> Room이 기본값을 그대로 둠
+int32 ParseMaxVisiblePlayers(int argc, char* argv[])
+{
+	int32 count = 0;
+	for (int32 i = 1; i + 1 < argc; i++)
+	{
+		if (string(argv[i]) == "--max-visible-players")
+			count = ::atoi(argv[i + 1]);
+	}
+	return count;
+}
+
 // GameServer.exe [--inventory-size N]  (인벤토리 칸 수, 기본 20. 테스트에서 작게 줘서 칸이 없으면 못 줍는지 확인)
 //   워커 스레드가 뜨기 전에 한 번만 바꿈 -> 이후 여러 스레드가 읽기만 해서 안전
 void ApplyInventorySize(int argc, char* argv[])
@@ -249,6 +262,7 @@ int main(int argc, char* argv[])
 	GRoom->SetSaveInterval(ParseSaveIntervalSec(argc, argv));
 	GRoom->SetDropLifetime(ParseDropLifetimeSec(argc, argv));
 	GRoom->SetMaxDrops(ParseMaxDrops(argc, argv));
+	GRoom->SetMaxVisiblePlayers(ParseMaxVisiblePlayers(argc, argv));
 	ApplyInventorySize(argc, argv);
 	ApplyLoadMonsterOptions(argc, argv);
 	GRoom->Start();

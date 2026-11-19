@@ -40,6 +40,13 @@ class Room : public JobQueue
 	static constexpr float	VIEW_LEAVE_RADIUS = 35.f;	// 5m = 1초 동안 걷는 거리. Grid 칸 크기로도 씀 (3x3칸이면 이 반경을 다 덮음)
 	static constexpr float	VIEW_EVENT_SLACK = 1.f;	// 이벤트 받는 사람 찾을 때 여유 (틱 도중에는 위치가 시야 계산 뒤로 한 틱만큼 움직였을 수 있음)
 	static constexpr float	SKILL_RANGE_SLACK = 1.f;	// 사거리 여유 (m). 클라가 보는 위치는 지연만큼 다름 (몬스터 4m/s x 왕복 200ms = 0.8m)
+	// 몰린 상황 대책 (필드보스 주변 등): 다른 플레이어는 상한까지만 보이고, 멀수록 이동을 덜 자주 보냄
+	static constexpr int32	DEFAULT_MAX_VISIBLE_PLAYERS = 50;	// 한 명이 동시에 보는 다른 플레이어 상한 (--max-visible-players). 몬스터, 드랍은 상한 없음
+	static constexpr float	VIEW_STICKY_BONUS = 5.f;			// 이미 보이던 사람은 이만큼(m) 가깝다고 침 -> 순위 경계에서 보였다 안 보였다 반복하지 않게
+	static constexpr float	LOD_NEAR_RADIUS = 10.f;				// 이 안은 매 틱 (전투 거리)
+	static constexpr float	LOD_MID_RADIUS = 20.f;				// 이 안은 LOD_MID_INTERVAL_TICKS마다, 밖은 LOD_FAR_INTERVAL_TICKS마다
+	static constexpr uint64	LOD_MID_INTERVAL_TICKS = 2;			// 100ms
+	static constexpr uint64	LOD_FAR_INTERVAL_TICKS = 4;			// 200ms (그 사이는 클라가 dir * speed로 예측)
 	// 바닥 드랍
 	static constexpr int32	DEFAULT_MAX_DROPS = 500;	// 방 전체 상한 기본값. 넘으면 가장 오래된 것부터 지움 (몬스터가 아주 많을 때 대비)
 	static constexpr float	DROP_SCATTER_RADIUS = 1.f;	// 몬스터 자리에서 이 반경 안에 흩뿌림 (m)
@@ -51,6 +58,15 @@ class Room : public JobQueue
 	// 채팅 제한
 	static constexpr int32	CHAT_MAX_CHARS = 100;		// 글자 수 (바이트 아님. 한글도 1글자)
 	static constexpr uint64	CHAT_COOLDOWN_TICKS = 10;	// 0.5초에 한 번
+
+	// 시야 후보 다른 플레이어 하나 (SelectVisiblePlayers). 포인터는 함수 안에서만 씀 (객체는 _players가 들고 있음)
+	struct ViewCandidate
+	{
+		Player*	player = nullptr;
+		float	distSq = 0.f;
+		bool	wasVisible = false;
+		float	score = 0.f;		// 우선순위 점수 (작을수록 먼저). 상한을 넘을 때만 계산
+	};
 
 	// 타겟 검사 결과 (HandleSkill의 4~6번)
 	enum class TargetCheck { Ok, NoTarget, BadTarget, Invulnerable, OutOfRange };
@@ -80,6 +96,7 @@ public:
 	void	SetLoadMonsters(int32 count, float area);	// 부하 테스트용 몬스터 추가 (Start 전에 main에서 한 번, 기본 0마리)
 	void	SetDropLifetime(uint64 seconds);			// 바닥 드랍 수명 (Start 전에 main에서 한 번, 기본 60초)
 	void	SetMaxDrops(int32 count);					// 바닥 드랍 상한 (Start 전에 main에서 한 번, 0 이하면 기본 500 그대로)
+	void	SetMaxVisiblePlayers(int32 count);			// 보이는 다른 플레이어 상한 (Start 전에 main에서 한 번, 0 이하면 기본 50 그대로)
 	void	Start();				// 첫 틱 예약 (main에서 한 번)
 	void	Enter(PlayerRef player);
 	void	Leave(PlayerRef player);	// 방에서 빼기 + 저장 요청 (저장할 값을 꺼내야 해서 id가 아니라 Player)
@@ -128,7 +145,12 @@ private:
 	static void	CountTargetFail(TargetFailStats& stats, TargetCheck result);
 	void	UpdateViews(const Protocol::S_MOVE& tickMoves);						// 매 틱 끝: 플레이어마다 UpdateView
 	void	UpdateView(const PlayerRef& player, const Protocol::S_MOVE& tickMoves);	// 시야 다시 계산 -> S_DESPAWN, S_SPAWN, S_MOVE를 이 사람에게
-	void	EnterView(const PlayerRef& player);								// 입장 즉시: 주변을 나에게, 나를 주변에게
+	void	EnterView(const PlayerRef& player);								// 입장 즉시: 주변을 나에게, 나를 주변에게 (그 사람의 상한이 남았을 때)
+	int32	CountVisiblePlayers(Player& viewer);							// 지금 보고 있는 다른 플레이어 수 (입장 때만)
+	void	SelectVisiblePlayers(Player& viewer, float x, float z);			// 보일 다른 플레이어를 _viewCandidates에 (상한이면 우선순위 순으로 자름)
+	float	ViewPriority(Player& viewer, Player& other, float distSq, bool wasVisible);	// 작을수록 먼저 보임 (확장: 파티원, 공격 대상 등)
+	uint64	MoveIntervalFor(GameObject& object, float distSq);				// 거리별 이동 전송 간격 (틱). 확장: 객체 종류별 (보스는 매 틱 등)
+	void	ShowInView(Player& viewer, GameObject& other, float distSq, Protocol::S_SPAWN& spawnPkt, Protocol::S_MOVE& movePkt);	// 이번 틱에 보일 객체 하나
 	template<typename Func>
 	void	ForEachViewer(GameObject& object, Func&& func);					// object가 보이는 플레이어마다 func (object가 플레이어면 본인 포함)
 	void	BroadcastToViewers(GameObject& object, SendBufferRef sendBuffer);	// object가 보이는 사람에게 (본인 포함)
@@ -142,6 +164,8 @@ private:
 	xmap<uint64, DropRef>				_drops;		// 바닥 드랍. 정렬된 map: id 순 = 만든 순서 (id가 계속 커짐) -> begin()이 가장 오래된 드랍
 	uint64	_dropLifetimeTicks = 60 * TICKS_PER_SECOND;	// 드랍 수명 (--drop-lifetime-sec, 테스트에서 짧게)
 	int32	_maxDrops = DEFAULT_MAX_DROPS;				// 드랍 상한 (--max-drops, 테스트에서 작게)
+	int32	_maxVisiblePlayers = DEFAULT_MAX_VISIBLE_PLAYERS;	// 보이는 다른 플레이어 상한 (--max-visible-players)
+	xvector<ViewCandidate>	_viewCandidates;	// SelectVisiblePlayers가 매번 다시 채우는 작업용 목록 (멤버로 둬서 플레이어마다, 틱마다 메모리를 새로 잡지 않음)
 	std::mt19937	_rng{ std::random_device{}() };		// 드랍 확률, 골드 양, 흩뿌릴 자리 (Room 줄에서만 써서 하나로 충분)
 
 	uint64	_tick = 0;				// 서버 틱 번호 (S_MOVE의 server_tick)

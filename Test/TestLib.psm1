@@ -281,6 +281,34 @@ function Wait-Seconds
 
 # ==================== 로그 검사 ====================
 
+# 로그 파일에서 정규식 패턴이 나온 "횟수" (한 줄에 여러 번 나오면 다 셈. Get-LogMatchCount는 줄 수)
+#   예: 'S_SPAWN ids: 7 8 9'처럼 한 패킷에 여러 객체가 묶여 와도 객체 수로 셀 때
+function Get-LogMatchTotal
+{
+    param([string]$Name, [string]$Pattern)
+
+    $path = Join-Path $script:LogDir "$Name.txt"
+    if (-not (Test-Path $path)) { return 0 }
+    $total = 0
+    foreach ($line in Select-String -Path $path -Pattern $Pattern -AllMatches) { $total += $line.Matches.Count }
+    return $total
+}
+
+# Get-LogMatchTotal이 Expected 이상이 될 때까지 기다림 (Wait-LogCount의 "횟수" 판)
+function Wait-LogTotal
+{
+    param([string]$Name, [string]$Pattern, [int]$Expected, [int]$TimeoutSec = 10)
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline)
+    {
+        if ((Get-LogMatchTotal -Name $Name -Pattern $Pattern) -ge $Expected) { return }
+        Start-Sleep -Milliseconds 100
+    }
+    $actual = Get-LogMatchTotal -Name $Name -Pattern $Pattern
+    Add-TestFailure "[$Name] timed out waiting for '$Pattern' x $Expected (total): $actual"
+}
+
 # 로그 파일에서 정규식 패턴이 나온 줄 수
 function Get-LogMatchCount
 {
