@@ -7,7 +7,9 @@
 //   Idle --대기 시간 끝--> Patrol --목적지 도착--> Idle
 //   Idle / Patrol --감지 거리 안에 플레이어, 또는 맞음(OnDamaged)--> Chase
 //   Chase --사거리 안 + 쿨타임 끝--> Attack (멈춤, 방향 고정, 예고) --cast_ms 뒤 부채꼴 판정--> Chase
-//   Chase / Attack --타겟이 나감(left) / 죽음(dead) / 멀어짐(lost) / 스폰에서 너무 멂(leash)--> Return
+//   Chase / Attack --타겟이 나감(left) / 죽음(dead) / 멀어짐(lost)--> 다른 상대가 있으면 Chase (나를 때린 사람 우선, 없으면 감지 거리 안)
+//                                                                  아무도 없으면 Return
+//   Chase --스폰에서 너무 멂(leash)--> Return (다른 상대를 찾지 않음)
 //   Return --스폰 도착, HP 회복--> Idle          * Return 중에는 플레이어를 무시하고 무적
 enum class MonsterState
 {
@@ -53,6 +55,8 @@ private:
 	void	StartAttack(Room& room, float dx, float dz);	// (dx, dz): 타겟 쪽 방향 -> 판정 방향으로 고정
 	bool	IsInHitArea(const Protocol::PosInfo& targetPos);	// 고정 방향 부채꼴 안인지
 	bool	TryDetect(Room& room);
+	void	LoseTarget(Room& room, const char* reason);	// 타겟을 잃음(dead / left / lost): 다른 상대를 찾고, 없으면 GiveUpChase
+	PlayerRef	FindNextTarget(Room& room);				// 1) 나를 때린 사람 중 가까운 사람 2) 감지 거리 안의 사람. 없으면 nullptr
 	void	GiveUpChase(const char* reason);
 	void	SetState(MonsterState next);
 	bool	MoveTowards(float x, float z, float speed, float dt);
@@ -72,4 +76,5 @@ private:
 	float			_castRemaining = 0.f;	// Attack: 예고 남은 시간(초)
 	float			_castDirX = 0.f;		// Attack: 예고 시작 때 고정한 방향 (단위 벡터) -> 시전 중 타겟이 움직여도 안 따라 돎
 	float			_castDirZ = 1.f;
+	xvector<uint64>	_attackers;	// 이번 싸움에서 나를 때린 플레이어 id (Return 때 비움, 리스폰은 새 객체). 보통 몇 명뿐이라 vector
 };
