@@ -222,9 +222,79 @@ static void PickBotTarget(PacketSessionRef& session)
 	SendMoveInput(session, me->botTargetX - me->myX, me->botTargetZ - me->myZ, ++me->chaseSeq);	// 길이는 서버가 1로 줄임
 }
 
+// 보스전 부하 테스트 봇 (--bot-attack, Run-Load.ps1 -Boss)
+//   보스(S_SPAWN 몬스터 중 HP가 가장 큰 것)를 알면: 보스 주변 내 자리로 걸어가고, 사거리 안이면 멈춰서 기본 공격을 계속
+//   보스가 움직이면(타겟을 쫓음) 사거리 밖이 되니 다시 걸어감. 보스를 아직 못 봤으면 원래 봇처럼 돌아다님
+static constexpr float	BOT_BOSS_SPOT_RADIUS = 1.2f;	// 보스 기준 내 자리를 고르는 반경 (기본 공격 사거리 2m 안)
+static constexpr float	BOT_ATTACK_RANGE = 1.8f;		// 보스와 이 안이면 멈춰서 공격 (서버는 2m + 여유 1m로 검사)
+static constexpr int64	BOT_REAIM_US = 500'000;			// 걷는 중 보스 쪽으로 방향을 다시 잡는 간격
+static constexpr int64	BOT_ATTACK_INTERVAL_US = BASIC_ATTACK_COOLDOWN_US + 50'000;	// 쿨타임 + 여유 (서버에서 cooldown으로 거절되지 않게)
+
+// S_SPAWN에서 보스 후보 확인: HP가 지금 고른 것보다 크면 바꿈 (데이터 슬라임 200 < TestBoss 5천만)
+static void PickBoss(PacketSessionRef& session, const Protocol::ObjectInfo& object)
+{
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+	const int32 hp = object.stat_info().hp();
+	if (me->botBossId != 0 && hp <= me->botBossHp)
+		return;
+
+	if (me->botBossId == 0)	// 처음 고를 때만 내 자리를 정함
+	{
+		thread_local mt19937 rng{ random_device{}() };
+		uniform_real_distribution<float> offset(-BOT_BOSS_SPOT_RADIUS, BOT_BOSS_SPOT_RADIUS);
+		me->botSpotX = offset(rng);
+		me->botSpotZ = offset(rng);
+	}
+
+	const Protocol::PosInfo& pos = object.move_info().pos_info();
+	me->botBossId = object.object_id();
+	me->botBossHp = hp;
+	me->botBossX = pos.x();
+	me->botBossZ = pos.z();
+	me->botStopped = false;
+}
+
+static void UpdateBossBot(PacketSessionRef& session)
+{
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+	const int64 now = NowUs();
+	const float dx = me->botBossX - me->myX;
+	const float dz = me->botBossZ - me->myZ;
+
+	if (dx * dx + dz * dz > BOT_ATTACK_RANGE * BOT_ATTACK_RANGE)
+	{
+		// 사거리 밖: 내 자리 쪽으로 (멈춰 있었으면 바로, 걷는 중이면 0.5초마다 방향만 다시)
+		if (me->botStopped || now - me->botPickUs >= BOT_REAIM_US)
+		{
+			SendMoveInput(session, me->botBossX + me->botSpotX - me->myX, me->botBossZ + me->botSpotZ - me->myZ, ++me->chaseSeq);
+			me->botPickUs = now;
+			me->botStopped = false;
+		}
+		return;
+	}
+
+	// 사거리 안: 한 번 멈추고, 쿨타임마다 기본 공격
+	if (me->botStopped == false)
+	{
+		SendMoveInput(session, 0.f, 0.f, ++me->chaseSeq);
+		me->botStopped = true;
+	}
+	if (now - me->botAttackUs >= BOT_ATTACK_INTERVAL_US)
+	{
+		SendSkill(session, BASIC_ATTACK_SKILL_ID, me->botBossId);
+		me->botAttackUs = now;
+	}
+}
+
 static void UpdateBot(PacketSessionRef& session)
 {
 	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+	if (GBotAttack && me->botBossId != 0)
+	{
+		UpdateBossBot(session);
+		return;
+	}
+
 	const float dx = me->botTargetX - me->myX;
 	const float dz = me->botTargetZ - me->myZ;
 	const bool arrived = (dx * dx + dz * dz <= BOT_ARRIVE_DIST * BOT_ARRIVE_DIST);
@@ -461,6 +531,8 @@ bool Handle_S_SPAWN(PacketSessionRef& session, Protocol::S_SPAWN& pkt)
 		{
 			line << "(monster hp=" << object.stat_info().hp() << " lv=" << object.stat_info().level() << ")";	// stat_info가 실려 오는지 확인용
 			me->monsterIds.insert(object.object_id());
+			if (GBotAttack)
+				PickBoss(session, object);
 		}
 		else if (object.object_type() == Protocol::OBJECT_TYPE_DROP)	// 바닥 드랍: item_id 0 = 골드
 		{
@@ -552,6 +624,11 @@ bool Handle_S_MOVE(PacketSessionRef& session, Protocol::S_MOVE& pkt)
 
 			if (GChaseTest && entry.object_id() == me->chaseTargetId)
 				UpdateChaseTest(session, pkt.server_tick(), entry);
+			if (GBotAttack && entry.object_id() == me->botBossId)
+			{
+				me->botBossX = move.pos_info().x();
+				me->botBossZ = move.pos_info().z();
+			}
 			continue;
 		}
 
@@ -584,12 +661,21 @@ bool Handle_S_MOVE(PacketSessionRef& session, Protocol::S_MOVE& pkt)
 
 bool Handle_S_DESPAWN(PacketSessionRef& session, Protocol::S_DESPAWN& pkt)
 {
+	shared_ptr<ServerSession> me = static_pointer_cast<ServerSession>(session);
+
 	ostringstream line;
 	line << "S_DESPAWN ids:";
 	for (uint64 objectId : pkt.object_ids())
+	{
 		line << " " << objectId;
+		if (objectId == me->botBossId)	// --bot-attack: 보스가 시야 밖 -> 다시 보일 때(S_SPAWN) 새로 고름
+		{
+			me->botBossId = 0;
+			me->botBossHp = 0;
+		}
+	}
 	if (GBot == false)
-		Log(ClientIdOf(session), line.str());
+		Log(me->GetClientId(), line.str());
 	return true;
 }
 
@@ -643,6 +729,11 @@ bool Handle_S_DIE(PacketSessionRef& session, Protocol::S_DIE& pkt)
 	// 몬스터: 서버에서 이미 사라진 id (진짜 클라는 죽는 모션 뒤에 액터를 지움)
 	//   chaseTargetId는 0으로 되돌리지 않음: 0이면 리스폰 몬스터의 S_SPAWN을 받을 때 추적 테스트가 처음부터 다시 시작됨
 	me->monsterIds.erase(pkt.object_id());
+	if (pkt.object_id() == me->botBossId)	// --bot-attack: 보스가 죽음 -> 리스폰 S_SPAWN에서 새로 고름
+	{
+		me->botBossId = 0;
+		me->botBossHp = 0;
+	}
 
 	// 플레이어 죽음 확인용 (Test/Scenarios/PlayerDeath.ps1, --death-test)
 	//   내가 죽었으면 죽은 상태에서 이동 1개 + 기본 공격 1개를 보냄 -> 서버가 dead로 거절해야 함

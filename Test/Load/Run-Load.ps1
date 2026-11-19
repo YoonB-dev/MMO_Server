@@ -2,6 +2,8 @@
 #   .\Test\Load\Run-Load.ps1 -Players 100 -Monsters 300 -Label baseline
 #   .\Test\Load\Run-Load.ps1 -Players 50 -NoRecord        기록 확인용 (results.csv에 안 남김)
 #   .\Test\Load\Run-Load.ps1 -Build ...                   Release 빌드부터 (GameServer, DummyClient, OutGameServer)
+#   .\Test\Load\Run-Load.ps1 -Boss -Monsters 0 -Area 15 -Label boss-before
+#                                                         보스전: (0, 0)에 TestBoss(HP 5천만) + 봇이 모두 보스에게 붙어서 기본 공격
 #   스크립트 실행이 막혀 있으면: powershell -ExecutionPolicy Bypass -File .\Test\Load\Run-Load.ps1 ...
 #
 # 순서: DB 준비 -> OutGameServer + GameServer(--load-monsters) -> 봇 입장 -> 워밍업(맵에 흩어지는 시간) -> 측정 -> 정리
@@ -26,7 +28,8 @@ param(
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
     [switch]$Build,
-    [switch]$NoRecord
+    [switch]$NoRecord,
+    [switch]$Boss           # 보스전 (GameServer --load-boss 2, DummyClient --bot-attack). results.csv에는 열이 따로 없어서 -Label로 구분
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,6 +43,12 @@ Initialize-TestContext -Configuration $Configuration -LogDir $runDir
 
 $serverArgs = "--load-monsters $Monsters --load-area $Area"
 $botArgs    = "--count $Players --account-prefix load --no-ping --bot --area $Area"
+$bossType   = 2     # Database/Data/monster.sql의 TestBoss
+if ($Boss)
+{
+    $serverArgs += " --load-boss $bossType"
+    $botArgs    += ' --bot-attack'
+}
 
 # ==================== 측정 환경 (env.txt) ====================
 
@@ -65,7 +74,7 @@ $envLines = @(
     "server args   $serverArgs"
     "bot args      $botArgs"
     "players       $Players"
-    "monsters      $Monsters (+ data_monster_spawn)"
+    "monsters      $Monsters (+ data_monster_spawn)$(if ($Boss) { " + boss (type $bossType) at (0, 0)" })"
     "area          +-$Area m"
     "warmup        $WarmupSec s"
     "measure       $MeasureSec s"
@@ -82,8 +91,11 @@ if ($dirty) { Write-Host 'WARNING: uncommitted changes - this result cannot be t
 $roomPattern = '\[Room\] tick (\d+), avg interval ([\d.e+-]+)ms, work avg ([\d.e+-]+)ms max ([\d.e+-]+)ms, ' +
                'monster moves (\d+) \([^)]*\), players (\d+), monsters (\d+), sent (\d+) packets (\d+) KB'
 
+$hitPattern = '\[Room\] skill hits (\d+)'   # 플레이어 스킬 명중 수 (10초 구간, 0이면 안 찍힘)
+
 $samples   = New-Object System.Collections.Generic.List[object]
 $roomRows  = @()
+$hitRows   = @()
 $entered   = 0
 $alive     = $false
 
@@ -154,6 +166,9 @@ try
             }
         }
     })
+    $hitRows = @(Get-Content $serverLog | Select-Object -Skip $skipLines | ForEach-Object {
+        if ($_ -match $hitPattern) { [double]$Matches[1] }
+    })
 }
 finally
 {
@@ -200,6 +215,13 @@ $result = [ordered]@{
 
 $summary = @("run $runName", '') + ($result.GetEnumerator() | ForEach-Object { '{0,-22} {1}' -f $_.Key, $_.Value })
 $summary += ''
+if ($Boss)
+{
+    # [Room] 줄과 같은 10초 구간 (results.csv에는 열이 없어서 summary에만)
+    $hitsPerSec = if ($roomSec) { [math]::Round(($hitRows | Measure-Object -Sum).Sum / $roomSec) } else { 0 }
+    $summary += "skill hits/s           $hitsPerSec (boss fight: player basic attacks that hit)"
+    $summary += ''
+}
 $summary += "[Room] lines used ($($roomRows.Count), each = 10 s; the first one may start up to 10 s before the measure window):"
 $summary += $roomRows | ForEach-Object {
     "  interval $($_.IntervalMs)ms, work avg $($_.WorkAvgMs)ms max $($_.WorkMaxMs)ms, players $($_.Players), monsters $($_.Monsters), sent $($_.Packets) packets $($_.KB) KB"

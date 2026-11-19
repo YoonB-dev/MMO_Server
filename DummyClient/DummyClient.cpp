@@ -6,8 +6,8 @@
 #include "AuthClient.h"
 
 // 접속 확인용 더미 클라이언트: N명이 아웃게임 서버에 로그인 -> 게임 서버에 접속해서 토큰으로 입장하고, 1초마다 C_PING -> S_PING 왕복 시간 출력
-//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--account-prefix dummy] [--auth-host localhost] [--auth-port 7100] [--token T] [--character-id N] [--no-ping] [--input-test] [--move-test] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test] [--ranged-test] [--dodge-test] [--death-test] [--chat-test] [--chat-reply] [--pickup-test] [--move-item-test] [--bot] [--area M]
-//   부하 테스트(Test/Load/Run-Load.ps1)는 --bot --area 100 --no-ping
+//   DummyClient.exe [--count N] [--ip 127.0.0.1] [--port 7777] [--account-prefix dummy] [--auth-host localhost] [--auth-port 7100] [--token T] [--character-id N] [--no-ping] [--input-test] [--move-test] [--monster-log] [--chase-test] [--turn-test] [--flee-test] [--attack-test] [--ranged-test] [--dodge-test] [--death-test] [--chat-test] [--chat-reply] [--pickup-test] [--move-item-test] [--bot] [--bot-attack] [--area M]
+//   부하 테스트(Test/Load/Run-Load.ps1)는 --bot --area 100 --no-ping (보스전은 -Boss -> --bot-attack 추가)
 //   인자 없이 실행하면 3명, 127.0.0.1:7777, ping 사용 (Test/Run-Test.ps1에서 옵션을 넘겨서 사용)
 static const int32 IOCP_THREAD_COUNT = 2;
 
@@ -38,6 +38,7 @@ struct ClientOptions
 	bool	pickupTest = false;	// S_PING(1초)마다 줍기 키 (C_PICKUP)
 	bool	moveItemTest = false;	// 인벤토리에 젤리 50/10, 검 2개가 생기면 칸 옮기기 묶음 (C_MOVE_ITEM)
 	bool	bot = false;		// 부하 테스트: 무작위 지점을 계속 돌아다님 + 패킷마다 찍는 로그 끔
+	bool	botAttack = false;	// 보스전 부하 테스트: 봇이 보스에게 가서 멈추고 계속 기본 공격 (--bot도 같이 켜짐)
 	float	area = 100.f;		// 봇이 돌아다니는 범위 ±area (m)
 };
 
@@ -108,6 +109,8 @@ ClientOptions ParseOptions(int argc, char* argv[])
 			options.moveItemTest = true;
 		else if (arg == "--bot")
 			options.bot = true;
+		else if (arg == "--bot-attack")
+			options.botAttack = true;
 		else if (arg == "--area" && hasValue)
 			options.area = static_cast<float>(::atof(argv[++i]));
 		else
@@ -138,8 +141,9 @@ int main(int argc, char* argv[])
 	GChatReply = options.chatReply;
 	GPickupTest = options.pickupTest;
 	GMoveItemTest = options.moveItemTest;
-	GBot = options.bot;
+	GBot = options.bot || options.botAttack;	// 보스 공격 봇도 봇 (로그 끔, 보스를 못 봤을 때는 돌아다님)
 	GBotArea = options.area;
+	GBotAttack = options.botAttack;
 
 	this_thread::sleep_for(1s); // 같이 실행할 때 서버가 먼저 열리도록 잠깐 대기
 
