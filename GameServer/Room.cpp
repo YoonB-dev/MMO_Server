@@ -41,7 +41,7 @@
 //   -> 빗나감이면 끝, 맞았으면 ApplyDamage(S_CHANGE_HP)
 //   몬스터 공격은 AI가 정함 (Monster::UpdateChase -> StartAttack: BroadcastSkill로 예고 -> UpdateAttack: 판정 -> HitPlayer)
 //   플레이어 HP 0 -> KillPlayer (시체로 남음, S_DIE) -> 5초 뒤 RevivePlayer (시작 위치, S_REVIVE)
-//   -> HP 0이면 KillMonster (S_DIE, 리스폰 예약), 아니면 Monster::OnDamaged (어그로)
+//   -> HitMonster: HP 0이면 KillMonster (S_DIE, 보상, 리스폰 예약), 아니면 Monster::OnDamaged (어그로)
 
 // main에서 생성 (전역 변수 초기화 시점에는 ServerCore의 GMemory가 아직 없을 수 있음)
 RoomRef GRoom;
@@ -610,13 +610,7 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 	if (target == nullptr)
 		return;		// 빗나감: 데미지 없음
 
-	ApplyDamage(*target, player->GetObjectId(), skill->damage);
-
-	// 몬스터만의 처리는 여기서 (ApplyDamage는 GameObject 공통)
-	if (target->GetStatInfo()->hp() == 0)
-		KillMonster(target, player->GetObjectId());
-	else
-		target->OnDamaged(player->GetObjectId());	// 어그로
+	HitMonster(target, player->GetObjectId(), skill->damage);
 }
 
 // HandleSkill의 4~6번 타겟 검사. Ok면 outTarget에 몬스터를 채움 (아니면 건드리지 않음)
@@ -1216,6 +1210,23 @@ void Room::HitPlayer(const PlayerRef& target, uint64 attackerId, int32 damage)
 	ApplyDamage(*target, attackerId, damage);
 	if (target->IsDead())
 		KillPlayer(target, attackerId);
+}
+
+// 몬스터가 맞음: 데미지 + 죽음(보상, 리스폰) 또는 어그로를 한 곳에서. HitPlayer와 같은 모양
+//   데미지 공통은 ApplyDamage, 죽은 뒤 처리는 종류마다 다름 (몬스터는 방에서 지움, 플레이어는 시체로 남음)
+//   스킬이든 나중의 출혈 / 지속 데미지든 몬스터를 때리는 길은 전부 여기로 -> 죽음 처리가 한 곳
+//   주의: KillMonster가 _monsters에서 지우므로, _monsters를 도는 루프(UpdateMonsters) 안에서는 부르면 안 됨
+//         (지속 데미지는 별도 단계에서 돌거나, 죽음을 표시해 두고 루프가 끝난 뒤 처리)
+void Room::HitMonster(const MonsterRef& target, uint64 attackerId, int32 damage)
+{
+	if (target->IsInvulnerable())
+		return;		// 돌아가는 중(Return)은 무적 (스킬은 CheckTarget에서 미리 거르지만, 다른 길에서 와도 안전하게)
+
+	ApplyDamage(*target, attackerId, damage);
+	if (target->GetStatInfo()->hp() == 0)
+		KillMonster(target, attackerId);	// 마지막 공격자 = 처치자 (지속 데미지로 죽어도 그 효과를 건 사람)
+	else
+		target->OnDamaged(attackerId);		// 어그로 + 때린 사람 기억
 }
 
 // 플레이어 죽음: 방에는 남김 (연결 유지, 시체로 보임). 멈추고, 알리고, 부활 예약

@@ -95,6 +95,7 @@ public:
 	void		BroadcastHp(GameObject& target, int32 damage, uint64 attackerId);	// target의 지금 HP를 target이 보이는 사람에게 (데미지, 회복 공통)
 	void		BroadcastSkill(GameObject& caster, const SkillData& skill, uint64 targetId);	// S_SKILL (플레이어, 몬스터 공통)
 	void		HitPlayer(const PlayerRef& target, uint64 attackerId, int32 damage);			// 데미지 + HP 0이면 KillPlayer
+	void		HitMonster(const MonsterRef& target, uint64 attackerId, int32 damage);		// 데미지 + HP 0이면 KillMonster, 아니면 어그로 (몬스터를 때리는 길은 전부 여기로)
 
 private:
 	void	SpawnMonsters();
