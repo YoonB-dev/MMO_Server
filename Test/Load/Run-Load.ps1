@@ -183,7 +183,9 @@ function Get-Avg { param($Values) if ($null -eq $Values -or @($Values).Count -eq
 function Get-Max { param($Values) if ($null -eq $Values -or @($Values).Count -eq 0) { return 0 } return ($Values | Measure-Object -Maximum).Maximum }
 function Round2  { param([double]$Value) return [math]::Round($Value, 2) }
 
-$roomSec = $roomRows.Count * 10   # [Room] 한 줄 = 10초(200틱) 구간
+# [Room] 한 줄 = 200틱 구간. 틱이 밀리면 10초보다 길어지므로 실제 길이 = 200틱 x 그 줄의 평균 틱 간격
+#   (10초로 치면 틱이 321ms로 밀린 보스전 400명에서 초당 값이 6.4배 부풀려짐)
+$roomSec = ($roomRows | ForEach-Object { 200 * $_.IntervalMs / 1000 } | Measure-Object -Sum).Sum
 $result = [ordered]@{
     date                 = $started.ToString('yyyy-MM-dd HH:mm')
     label                = $Label
@@ -224,7 +226,7 @@ if ($Boss)
     $summary += "skill work ms/s        $skillMsPerSec (time in HandleSkill per second, outside the tick work; 1000 = Room thread busy all the time)"
     $summary += ''
 }
-$summary += "[Room] lines used ($($roomRows.Count), each = 10 s; the first one may start up to 10 s before the measure window):"
+$summary += "[Room] lines used ($($roomRows.Count), each = 200 ticks = 10 s at 50 ms, $([math]::Round($roomSec)) s in total; the first one may start before the measure window):"
 $summary += $roomRows | ForEach-Object {
     "  interval $($_.IntervalMs)ms, work avg $($_.WorkAvgMs)ms max $($_.WorkMaxMs)ms, players $($_.Players), monsters $($_.Monsters), sent $($_.Packets) packets $($_.KB) KB"
 }
