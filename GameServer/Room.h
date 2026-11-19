@@ -34,6 +34,7 @@ class Room : public JobQueue
 	static constexpr int32	LOAD_SPAWN_ID_BASE = 100000;	// 부하 테스트 스폰 줄 번호 (기획 데이터 spawn_id와 안 겹치게)
 	static constexpr int32	LOAD_RESPAWN_MS = 10000;
 	static constexpr uint32	LOAD_MONSTER_SEED = 12345;		// 고정 -> 매번 같은 배치
+	static constexpr int32	LOAD_BOSS_SPAWN_ID = 900000;	// 부하 테스트 보스 스폰 줄 번호 (기획 데이터, 부하 몬스터와 안 겹치게)
 	// 시야 (AOI): 이 거리 안에 들어오면 S_SPAWN, 나가는 거리 밖으로 가면 S_DESPAWN. 사이에서는 그대로 (경계에서 깜빡임 방지)
 	//   들어오는 반경은 상호작용 거리보다 커야 함 (원거리 스킬 10m + 여유 1m, 몬스터 추적 포기 12m)
 	static constexpr float	VIEW_ENTER_RADIUS = 30.f;
@@ -98,6 +99,7 @@ public:
 	void	SetMonsterSendPolicy(const MoveSendPolicy* policy);	// Start 전에 main에서 한 번
 	void	SetSaveInterval(uint64 seconds);	// 주기 저장 간격 (Start 전에 main에서 한 번, 기본 60초)
 	void	SetLoadMonsters(int32 count, float area);	// 부하 테스트용 몬스터 추가 (Start 전에 main에서 한 번, 기본 0마리)
+	void	SetLoadBoss(int32 monsterId) { _loadBossType = monsterId; }	// 부하 테스트용 보스 종류 (Start 전에 main에서 한 번, 0이면 없음)
 	void	SetDropLifetime(uint64 seconds);			// 바닥 드랍 수명 (Start 전에 main에서 한 번, 기본 60초)
 	void	SetMaxDrops(int32 count);					// 바닥 드랍 상한 (Start 전에 main에서 한 번, 0 이하면 기본 500 그대로)
 	void	SetMaxVisiblePlayers(int32 count);			// 보이는 다른 플레이어 상한 (Start 전에 main에서 한 번, 0 이하면 기본 50 그대로)
@@ -121,6 +123,7 @@ public:
 private:
 	void	SpawnMonsters();
 	void	SpawnLoadMonsters();								// 부하 테스트용 (SetLoadMonsters로 정한 수만큼)
+	void	SpawnLoadBoss();									// 부하 테스트용 보스 한 마리 (SetLoadBoss로 정한 종류, (0, 0))
 	void	SpawnMonster(MonsterSpawnData spawn);				// 한 마리 생성 + S_SPAWN. 시작할 때와 리스폰 때 같이 씀
 	void	KillMonster(MonsterRef monster, uint64 killerId);	// 방에서 빼기 + S_DIE + 처치 보상 + 리스폰 예약
 	void	GiveExp(uint64 killerId, int32 amount);				// 처치 경험치: 처치자에게 S_CHANGE_EXP, 레벨업이면 주변에 S_LEVEL_UP
@@ -184,6 +187,7 @@ private:
 	// 부하 테스트용 몬스터 (--load-monsters, --load-area). 기획 데이터(data_monster_spawn)와 별도로 SpawnMonsters에서 추가
 	int32	_loadMonsterCount = 0;
 	float	_loadMonsterArea = 0.f;
+	int32	_loadBossType = 0;		// --load-boss <monster_id>. 0이면 없음
 
 	// 10초(200틱) 통계 -> LogStats에서 출력 후 0으로
 	uint64	_workTimeSumUs = 0;		// 틱 처리 시간 합 (마이크로초)
@@ -193,6 +197,7 @@ private:
 	uint64	_sentBytes = 0;			// 보낸 바이트 수 (패킷 헤더 포함)
 	uint64	_viewSpawned = 0;		// UpdateView에서 S_SPAWN에 넣은 항목 수 (새로 보이게 됨: 상한 안으로 들어옴 + 반경 안으로 들어옴)
 	uint64	_viewDespawned = 0;		// UpdateView에서 S_DESPAWN에 넣은 항목 수 (안 보이게 됨: 상한 밖으로 밀림 + 반경 밖으로 나감)
+	uint64	_skillHits = 0;			// 플레이어 스킬이 몬스터를 맞힌 횟수 (HandleSkill -> HitMonster)
 	SkillRejectStats	_skillRejects;	// 스킬 요청 거절 이유별 횟수
 	TargetFailStats		_skillMisses;	// 빗나감 이유별 횟수 (S_SKILL target 0으로 나간 것)
 };

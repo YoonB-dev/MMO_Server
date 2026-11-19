@@ -71,6 +71,30 @@ void Room::SpawnMonsters()
 		SpawnMonster(spawn);
 
 	SpawnLoadMonsters();
+	SpawnLoadBoss();
+}
+
+// 부하 테스트용 보스 (--load-boss <monster_id>): 입장 위치 (0, 0)에 한 마리
+//   스폰 줄을 DB에 안 넣는 이유: 평소 게임과 회귀 테스트에는 안 나오게. 진짜 필드보스는 data_monster_spawn에 줄만 추가하면 같은 코드로 나옴
+//   리스폰도 일반 몬스터처럼 이 줄로 함 (Monster가 복사해 둠)
+void Room::SpawnLoadBoss()
+{
+	if (_loadBossType == 0)
+		return;
+
+	if (FindMonsterData(_loadBossType) == nullptr)
+	{
+		LogLine() << "[Room] load boss skipped: monster type " << _loadBossType << " not in data_monster";
+		return;
+	}
+
+	MonsterSpawnData spawn;
+	spawn.spawnId = LOAD_BOSS_SPAWN_ID;
+	spawn.monsterId = _loadBossType;
+	spawn.respawnMs = LOAD_RESPAWN_MS;	// x, z는 기본값 0
+	SpawnMonster(spawn);
+
+	LogLine() << "[Room] load boss: monster type " << _loadBossType << " at (0, 0)";
 }
 
 // 부하 테스트용 몬스터 (--load-monsters N --load-area M): ±M m 안의 무작위 위치에 N마리
@@ -189,6 +213,10 @@ void Room::LogStats(uint64 now)
 			<< ", view changes +" << _viewSpawned << " -" << _viewDespawned;	// 10초 동안 새로 보임 / 안 보이게 됨 (상한 경계 교체가 잦으면 커짐)
 	}
 
+	// 스킬 명중: 이 구간에 하나라도 있었을 때만 (보스 부하 테스트에서 봇이 실제로 때리고 있는지 확인)
+	if (_skillHits > 0)
+		LogLine() << "[Room] skill hits " << _skillHits;
+
 	// 스킬 거절 / 빗나감: 이 구간에 하나라도 있었을 때만 출력
 	//   거절은 정상 플레이에서 거의 0 (핵 의심용), 빗나감은 허공 공격이라 정상 플레이에서도 생김
 	const SkillRejectStats& r = _skillRejects;
@@ -215,6 +243,7 @@ void Room::LogStats(uint64 now)
 	_sentBytes = 0;
 	_viewSpawned = 0;
 	_viewDespawned = 0;
+	_skillHits = 0;
 	_skillRejects = {};
 	_skillMisses = {};
 }
@@ -726,6 +755,7 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 	if (target == nullptr)
 		return;		// 빗나감: 데미지 없음
 
+	_skillHits++;
 	HitMonster(target, player->GetObjectId(), skill->damage);
 }
 

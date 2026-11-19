@@ -70,7 +70,11 @@ INSERT INTO data_monster
     (monster_id, name, level, max_hp, patrol_range, patrol_speed, idle_min_sec, idle_max_sec,
      detect_range, stop_range, chase_speed, lose_range, leash_range, return_speed, skill_id, exp_reward, gold_min, gold_max)
 VALUES
-    (1, 'Slime', 3, 200, 5, 1.5, 1, 3, 8, 1.5, 3.5, 12, 20, 6, 101, 20, 5, 15);
+    (1, 'Slime', 3, 200, 5, 1.5, 1, 3, 8, 1.5, 3.5, 12, 20, 6, 101, 20, 5, 15),
+    (2, 'TestBoss', 30, 50000000, 1, 1, 2, 4, 15, 1.5, 2, 25, 30, 6, 102, 0, 0, 0);
+
+-- TestBoss(2)는 스폰 줄이 없음: 부하 테스트(Run-Load.ps1 -Boss -> GameServer --load-boss 2)에서만 (0, 0)에 나옴
+--   HP 5천만: 400명이 0.5초마다 10씩 때려도(초당 8,000) 측정 2분 동안 안 죽음. 경험치 / 골드 / 드랍 없음 (측정에 드랍이 안 섞이게)
 
 INSERT INTO data_monster_spawn (spawn_id, monster_id, pos_x, pos_z, respawn_ms) VALUES
     (1, 1, 15, 15, 10000),

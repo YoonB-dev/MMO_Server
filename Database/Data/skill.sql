@@ -32,4 +32,7 @@ CREATE TABLE data_skill (
 INSERT INTO data_skill (skill_id, name, cooldown_ms, range_m, damage, mp_cost, requires_target, cast_ms, hit_angle_deg) VALUES
     (1, 'BasicAttack', 500, 2, 10, 0, 0, 0, 0),
     (2, 'RangedShot', 5000, 10, 30, 20, 1, 0, 0),
-    (101, 'SlimeTackle', 2000, 2, 16, 0, 1, 600, 45);
+    (101, 'SlimeTackle', 2000, 2, 16, 0, 1, 600, 45),
+    (102, 'BossSlam', 3000, 3, 1, 0, 1, 1000, 60);
+
+-- BossSlam(102)은 TestBoss(부하 테스트용) 공격: 맞는 느낌만 (3초마다 1초 예고 후 1 데미지)
