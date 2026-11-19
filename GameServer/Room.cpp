@@ -9,6 +9,7 @@
 #include "DBQueue.h"
 #include "Drop.h"
 #include <cmath>
+#include <limits>
 #include <algorithm>
 #include <chrono>
 #include <random>
@@ -184,7 +185,8 @@ void Room::LogStats(uint64 now)
 		for (auto& [id, player] : _players)
 			visibleSum += player->visible.size();
 		LogLine() << "[Room] view: avg " << (static_cast<double>(visibleSum) / _players.size()) << " objects per player"
-			<< " (enter " << VIEW_ENTER_RADIUS << "m, leave " << VIEW_LEAVE_RADIUS << "m), drops on ground " << _drops.size();
+			<< " (enter " << VIEW_ENTER_RADIUS << "m, leave " << VIEW_LEAVE_RADIUS << "m), drops on ground " << _drops.size()
+			<< ", view changes +" << _viewSpawned << " -" << _viewDespawned;	// 10초 동안 새로 보임 / 안 보이게 됨 (상한 경계 교체가 잦으면 커짐)
 	}
 
 	// 스킬 거절 / 빗나감: 이 구간에 하나라도 있었을 때만 출력
@@ -211,6 +213,8 @@ void Room::LogStats(uint64 now)
 	_monsterMovesSent = 0;
 	_sentPackets = 0;
 	_sentBytes = 0;
+	_viewSpawned = 0;
+	_viewDespawned = 0;
 	_skillRejects = {};
 	_skillMisses = {};
 }
@@ -310,6 +314,7 @@ void Room::EnterView(const PlayerRef& player)
 // 보일 다른 플레이어를 _viewCandidates에 모음
 //   반경: 이미 보이던 사람은 나가는 반경(35m), 새로 보일 사람은 들어오는 반경(30m) 안 (경계 깜빡임 방지, 지금과 같음)
 //   상한(_maxVisiblePlayers)을 넘으면 우선순위 점수가 작은 순으로 상한까지만 남김
+//     순위는 VIEW_RESELECT_INTERVAL_TICKS(0.5초)마다 다시 매김. 그 사이 틱은 보이던 사람을 그대로 두고 빈자리만 가까운 순으로 채움
 //   std::nth_element: 앞쪽 N개가 "가장 작은 N개"가 되게만 놓음 (그 안의 순서는 안 맞춤) -> 전체 정렬보다 빠름
 void Room::SelectVisiblePlayers(Player& viewer, float x, float z)
 {
@@ -332,8 +337,17 @@ void Room::SelectVisiblePlayers(Player& viewer, float x, float z)
 	if (static_cast<int32>(_viewCandidates.size()) <= _maxVisiblePlayers)
 		return;		// 상한 안: 전부 보임 (지금까지와 같음)
 
+	// 순위를 다시 매기는 틱인지. objectId를 더해서 플레이어마다 다른 틱에 돌게 함 (400명이 같은 틱에 몰리지 않게)
+	//   매 틱 다시 매기면 몰린 곳에서는 경계를 넘나드는 사람이 늘 있어서 거의 매 틱 S_SPAWN / S_DESPAWN이 나감 (측정: 400명 기준 한 명당 초당 22번)
+	const bool reselect = (_tick + viewer.GetObjectId()) % VIEW_RESELECT_INTERVAL_TICKS == 0;
+
 	for (ViewCandidate& c : _viewCandidates)
-		c.score = ViewPriority(viewer, *c.player, c.distSq, c.wasVisible);
+	{
+		if (c.wasVisible && reselect == false)
+			c.score = std::numeric_limits<float>::lowest();	// 사이 틱: 보이던 사람은 무조건 남김 -> 빈자리만 새 사람으로 채움
+		else
+			c.score = ViewPriority(viewer, *c.player, c.distSq, c.wasVisible);
+	}
 	std::nth_element(_viewCandidates.begin(), _viewCandidates.begin() + _maxVisiblePlayers, _viewCandidates.end(),
 		[](const ViewCandidate& a, const ViewCandidate& b) { return a.score < b.score; });
 	_viewCandidates.resize(_maxVisiblePlayers);	// 뒤쪽(우선순위 낮은 사람)은 이번 틱에 확인 안 됨 -> 이미 보이던 사람이면 S_DESPAWN
@@ -352,14 +366,21 @@ int32 Room::CountVisiblePlayers(Player& viewer)
 	return count;
 }
 
-// 다른 플레이어를 보여 줄 우선순위 점수 (작을수록 먼저). 지금은 거리 - 끈적임
-//   확장 지점: 파티원 / 길드원 / 내 공격 대상 / 나를 공격 중인 사람은 점수를 크게 낮춰서 항상 보이게 -> 이 함수 하나만 고치면 됨
+// 다른 플레이어를 보여 줄 우선순위 점수 (작을수록 먼저). 상한이 꽉 차면 점수가 작은 사람이 큰 사람 자리를 뺏음
+//   ① 작은 시야 안:                거리 - 끈적임(보이던 사람) / 거리(새 사람)
+//   ② 작은 시야 밖, 보이던 사람:   VIEW_TIER_STEP + 거리      -> 밖에서 새로 온 사람에게는 안 밀림 (①이 밀어낼 때는 먼 사람부터)
+//   ③ 작은 시야 밖, 새 사람:       VIEW_TIER_STEP * 2 + 거리  -> 빈자리가 있을 때만
+//   -> 자리를 뺏을 수 있는 건 작은 시야(전투 거리) 안에 들어온 사람뿐이라, 바깥끼리는 교체가 거의 없음
+//   확장 지점: 파티원 / 길드원 / 내 공격 대상 / 나를 공격 중인 사람은 ①보다 앞(음수 구역)으로 -> 이 함수 하나만 고치면 됨
 float Room::ViewPriority(Player& viewer, Player& other, float distSq, bool wasVisible)
 {
 	(void)viewer;	// 지금은 안 씀 (파티 등이 생기면 viewer와 other의 관계를 봄)
 	(void)other;
 	const float dist = std::sqrt(distSq);
-	return wasVisible ? dist - VIEW_STICKY_BONUS : dist;
+	const float nearRadius = wasVisible ? VIEW_NEAR_LEAVE_RADIUS : VIEW_NEAR_ENTER_RADIUS;
+	if (dist <= nearRadius)
+		return wasVisible ? dist - VIEW_STICKY_BONUS : dist;
+	return (wasVisible ? VIEW_TIER_STEP : VIEW_TIER_STEP * 2) + dist;
 }
 
 // 거리별 이동 전송 간격 (틱): 가까울수록 자주. 사이는 클라가 dir * speed로 예측
@@ -460,6 +481,9 @@ void Room::UpdateView(const PlayerRef& player, const Protocol::S_MOVE& tickMoves
 		}
 	}
 
+	_viewSpawned += spawnPkt.objects_size();
+	_viewDespawned += despawnPkt.object_ids_size();
+
 	if (despawnPkt.object_ids_size() > 0)
 		SendTo(player, ClientPacketHandler::MakeSendBuffer(despawnPkt));
 	if (spawnPkt.objects_size() > 0)
@@ -543,7 +567,6 @@ void Room::SetDropLifetime(uint64 seconds)
 	_dropLifetimeTicks = (seconds > 0 ? seconds : 1) * TICKS_PER_SECOND;
 }
 
-// 0 이하(인자를 안 줌)면 기본값 그대로. 0을 상한으로 쓰면 AddDrop이 비어 있는 _drops.begin()을 지우려 하므로 받지 않음
 // 0 이하(인자를 안 줌)면 기본값 그대로
 void Room::SetMaxVisiblePlayers(int32 count)
 {
@@ -551,6 +574,7 @@ void Room::SetMaxVisiblePlayers(int32 count)
 		_maxVisiblePlayers = count;
 }
 
+// 0 이하(인자를 안 줌)면 기본값 그대로. 0을 상한으로 쓰면 AddDrop이 비어 있는 _drops.begin()을 지우려 하므로 받지 않음
 void Room::SetMaxDrops(int32 count)
 {
 	if (count > 0)

@@ -42,7 +42,11 @@ class Room : public JobQueue
 	static constexpr float	SKILL_RANGE_SLACK = 1.f;	// 사거리 여유 (m). 클라가 보는 위치는 지연만큼 다름 (몬스터 4m/s x 왕복 200ms = 0.8m)
 	// 몰린 상황 대책 (필드보스 주변 등): 다른 플레이어는 상한까지만 보이고, 멀수록 이동을 덜 자주 보냄
 	static constexpr int32	DEFAULT_MAX_VISIBLE_PLAYERS = 50;	// 한 명이 동시에 보는 다른 플레이어 상한 (--max-visible-players). 몬스터, 드랍은 상한 없음
-	static constexpr float	VIEW_STICKY_BONUS = 5.f;			// 이미 보이던 사람은 이만큼(m) 가깝다고 침 -> 순위 경계에서 보였다 안 보였다 반복하지 않게
+	static constexpr float	VIEW_STICKY_BONUS = 10.f;			// 작은 시야 안에서 이미 보이던 사람은 이만큼(m) 가깝다고 침 -> 순위 경계에서 보였다 안 보였다 반복하지 않게
+	static constexpr float	VIEW_NEAR_ENTER_RADIUS = 10.f;		// 작은 시야: 이 안에 들어온 사람은 상한이 꽉 차 있어도 바깥 사람을 밀어내고 보임 (전투 거리)
+	static constexpr float	VIEW_NEAR_LEAVE_RADIUS = 12.f;		// 작은 시야에서 나가는 반경 (큰 시야 30/35처럼 경계에서 왔다갔다 방지)
+	static constexpr float	VIEW_TIER_STEP = 100.f;				// 구역 사이 점수 간격 (시야 최대 35m + 끈적임보다 커야 구역 순서가 안 섞임)
+	static constexpr uint64	VIEW_RESELECT_INTERVAL_TICKS = 10;	// 500ms. 상한을 넘을 때 순위를 다시 매기는 간격 (그 사이는 보이던 사람을 그대로 두고 빈자리만 채움)
 	static constexpr float	LOD_NEAR_RADIUS = 10.f;				// 이 안은 매 틱 (전투 거리)
 	static constexpr float	LOD_MID_RADIUS = 20.f;				// 이 안은 LOD_MID_INTERVAL_TICKS마다, 밖은 LOD_FAR_INTERVAL_TICKS마다
 	static constexpr uint64	LOD_MID_INTERVAL_TICKS = 2;			// 100ms
@@ -187,6 +191,8 @@ private:
 	uint64	_monsterMovesSent = 0;	// S_MOVE에 넣은 몬스터 항목 수
 	uint64	_sentPackets = 0;		// 보낸 패킷 수 (SendTo 호출 수 = 받는 사람 수만큼)
 	uint64	_sentBytes = 0;			// 보낸 바이트 수 (패킷 헤더 포함)
+	uint64	_viewSpawned = 0;		// UpdateView에서 S_SPAWN에 넣은 항목 수 (새로 보이게 됨: 상한 안으로 들어옴 + 반경 안으로 들어옴)
+	uint64	_viewDespawned = 0;		// UpdateView에서 S_DESPAWN에 넣은 항목 수 (안 보이게 됨: 상한 밖으로 밀림 + 반경 밖으로 나감)
 	SkillRejectStats	_skillRejects;	// 스킬 요청 거절 이유별 횟수
 	TargetFailStats		_skillMisses;	// 빗나감 이유별 횟수 (S_SKILL target 0으로 나간 것)
 };
