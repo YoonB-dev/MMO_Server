@@ -13,9 +13,6 @@
     <Filter Include="Packet\Generated">
       <UniqueIdentifier>{3B1E8E61-6F0A-4C7B-9C55-1F1C2E8A7A04}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Game">
-      <UniqueIdentifier>{3B1E8E61-6F0A-4C7B-9C55-1F1C2E8A7A06}</UniqueIdentifier>
-    </Filter>
     <Filter Include="Utils">
       <UniqueIdentifier>{3B1E8E61-6F0A-4C7B-9C55-1F1C2E8A7A05}</UniqueIdentifier>
     </Filter>
@@ -30,35 +27,11 @@
     <ClCompile Include="GameSession.cpp">
       <Filter>Session</Filter>
     </ClCompile>
-    <ClCompile Include="GameObject.cpp">
-      <Filter>Game</Filter>
-    </ClCompile>
-    <ClCompile Include="Monster.cpp">
-      <Filter>Game</Filter>
-    </ClCompile>
-    <ClCompile Include="GameData.cpp">
-      <Filter>Game</Filter>
-    </ClCompile>
-    <ClCompile Include="Room.cpp">
-      <Filter>Game</Filter>
-    </ClCompile>
-    <ClCompile Include="Grid.cpp">
-      <Filter>Game</Filter>
-    </ClCompile>
     <ClCompile Include="GameSessionManager.cpp">
       <Filter>Session</Filter>
     </ClCompile>
     <ClCompile Include="ClientPacketHandler.cpp">
       <Filter>Packet</Filter>
-    </ClCompile>
-    <ClCompile Include="MoveSendPolicy.cpp">
-      <Filter>Packet</Filter>
-    </ClCompile>
-    <ClCompile Include="JwtVerifier.cpp">
-      <Filter>Session</Filter>
-    </ClCompile>
-    <ClCompile Include="DBQueue.cpp">
-      <Filter>Game</Filter>
     </ClCompile>
     <ClCompile Include="Enum.pb.cc">
       <Filter>Packet\Generated</Filter>
@@ -77,44 +50,11 @@
     <ClInclude Include="GameSession.h">
       <Filter>Session</Filter>
     </ClInclude>
-    <ClInclude Include="GameObject.h">
-      <Filter>Game</Filter>
-    </ClInclude>
-    <ClInclude Include="Player.h">
-      <Filter>Game</Filter>
-    </ClInclude>
-    <ClInclude Include="Monster.h">
-      <Filter>Game</Filter>
-    </ClInclude>
-    <ClInclude Include="GameData.h">
-      <Filter>Game</Filter>
-    </ClInclude>
-    <ClInclude Include="Room.h">
-      <Filter>Game</Filter>
-    </ClInclude>
-    <ClInclude Include="Grid.h">
-      <Filter>Game</Filter>
-    </ClInclude>
-    <ClInclude Include="Drop.h">
-      <Filter>Game</Filter>
-    </ClInclude>
     <ClInclude Include="GameSessionManager.h">
       <Filter>Session</Filter>
     </ClInclude>
     <ClInclude Include="ClientPacketHandler.h">
       <Filter>Packet\Generated</Filter>
-    </ClInclude>
-    <ClInclude Include="MoveSendPolicy.h">
-      <Filter>Packet</Filter>
-    </ClInclude>
-    <ClInclude Include="JwtVerifier.h">
-      <Filter>Session</Filter>
-    </ClInclude>
-    <ClInclude Include="DBQueue.h">
-      <Filter>Game</Filter>
-    </ClInclude>
-    <ClInclude Include="LogLine.h">
-      <Filter>Utils</Filter>
     </ClInclude>
     <ClInclude Include="Enum.pb.h">
       <Filter>Packet\Generated</Filter>
