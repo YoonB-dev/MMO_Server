@@ -41,7 +41,15 @@ public:
 	bool	moveItemTestSent = false;	// --move-item-test: 옮기기 묶음을 보냈는지 (한 번만)
 	float	botTargetX = 0.f;		// --bot: 지금 걸어가는 목표 지점
 	float	botTargetZ = 0.f;
-	int64	botPickUs = 0;			// --bot: 목표를 고른 시각 (오래 못 가면 새로 고름)
+	int64	botPickUs = 0;			// --bot: 목표를 고른 시각 (오래 못 가면 새로 고름). --bot-attack에서는 보스 쪽으로 방향을 다시 잡은 시각
+	uint64	botBossId = 0;			// --bot-attack: 때릴 보스 id (S_SPAWN 몬스터 중 HP가 가장 큰 것, 0 = 아직 없음)
+	int32	botBossHp = 0;			// --bot-attack: 그 보스를 고를 때의 HP (더 큰 몬스터가 보이면 바꿈)
+	float	botBossX = 0.f;			// --bot-attack: 보스의 마지막으로 받은 위치
+	float	botBossZ = 0.f;
+	float	botSpotX = 0.f;			// --bot-attack: 보스 기준 내 자리 (처음 한 번 무작위로. 모두가 한 점에 겹치지 않게)
+	float	botSpotZ = 0.f;
+	bool	botStopped = false;		// --bot-attack: 사거리 안이라 멈춤 입력을 보냈는지
+	int64	botAttackUs = 0;		// --bot-attack: 마지막으로 공격을 보낸 시각
 
 private:
 	int32 _clientId = 0;	// 이 프로세스 안에서 1, 2, 3 ... (로그 구분용)
@@ -64,6 +72,7 @@ extern bool GPickupTest;	// --pickup-test: S_PING(1초)마다 C_PICKUP (서버�
 extern bool GMoveItemTest;	// --move-item-test: 인벤토리에 젤리 50/10, 검 2개가 생기면 옮기기 / 바꾸기 / 합치기 / 거절 3종을 보냄
 extern bool GBot;		// --bot: 부하 테스트용. ±GBotArea 안의 무작위 지점을 계속 돌아다니고, 받은 패킷마다 찍는 로그는 끔
 extern float GBotArea;	// --area: 봇이 돌아다니는 범위 (m, 기본 100 = 서버 월드 200x200 전체)
+extern bool GBotAttack;	// --bot-attack: 봇이 보스(HP가 가장 큰 몬스터)에게 가서 멈추고 기본 공격을 계속 함 (보스전 부하 테스트)
 extern std::vector<LoginInfo> GLogins;	// 클라 번호 순서의 입장 정보 (토큰 + 캐릭터, [0] = Client 1)
 
 int64 NowUs();

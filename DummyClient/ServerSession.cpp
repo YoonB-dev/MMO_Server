@@ -18,6 +18,7 @@ bool GPickupTest = false;
 bool GMoveItemTest = false;
 bool GBot = false;
 float GBotArea = 100.f;
+bool GBotAttack = false;
 std::vector<LoginInfo> GLogins;
 
 int64 NowUs()

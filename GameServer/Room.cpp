@@ -71,6 +71,30 @@ void Room::SpawnMonsters()
 		SpawnMonster(spawn);
 
 	SpawnLoadMonsters();
+	SpawnLoadBoss();
+}
+
+// 부하 테스트용 보스 (--load-boss <monster_id>): 입장 위치 (0, 0)에 한 마리
+//   스폰 줄을 DB에 안 넣는 이유: 평소 게임과 회귀 테스트에는 안 나오게. 진짜 필드보스는 data_monster_spawn에 줄만 추가하면 같은 코드로 나옴
+//   리스폰도 일반 몬스터처럼 이 줄로 함 (Monster가 복사해 둠)
+void Room::SpawnLoadBoss()
+{
+	if (_loadBossType == 0)
+		return;
+
+	if (FindMonsterData(_loadBossType) == nullptr)
+	{
+		LogLine() << "[Room] load boss skipped: monster type " << _loadBossType << " not in data_monster";
+		return;
+	}
+
+	MonsterSpawnData spawn;
+	spawn.spawnId = LOAD_BOSS_SPAWN_ID;
+	spawn.monsterId = _loadBossType;
+	spawn.respawnMs = LOAD_RESPAWN_MS;	// x, z는 기본값 0
+	SpawnMonster(spawn);
+
+	LogLine() << "[Room] load boss: monster type " << _loadBossType << " at (0, 0)";
 }
 
 // 부하 테스트용 몬스터 (--load-monsters N --load-area M): ±M m 안의 무작위 위치에 N마리
@@ -143,6 +167,8 @@ void Room::Tick()
 	UpdatePlayers(pkt);
 	UpdateMonsters(pkt);
 	UpdateViews(pkt);
+	FlushHpChanges();	// 시야 다음: 이번 틱에 새로 보인 사람은 S_SPAWN에 지금 HP가 이미 실려 있음
+	FlushSends();		// 맨 끝: 이번 틱(과 지난 틱 이후 잡)에서 쌓인 패킷을 세션마다 WSASend 한 번
 
 	const uint64 workUs = chrono::duration_cast<chrono::microseconds>(chrono::steady_clock::now() - workStart).count();
 	_workTimeSumUs += workUs;
@@ -189,6 +215,10 @@ void Room::LogStats(uint64 now)
 			<< ", view changes +" << _viewSpawned << " -" << _viewDespawned;	// 10초 동안 새로 보임 / 안 보이게 됨 (상한 경계 교체가 잦으면 커짐)
 	}
 
+	// 스킬 명중 + 스킬 처리 시간: 이 구간에 명중이 하나라도 있었을 때만 (보스 부하 테스트에서 봇이 실제로 때리는지, 그 비용이 얼마인지)
+	if (_skillHits > 0)
+		LogLine() << "[Room] skill hits " << _skillHits << ", skill work " << (_skillWorkUs / 1000.0) << " ms";
+
 	// 스킬 거절 / 빗나감: 이 구간에 하나라도 있었을 때만 출력
 	//   거절은 정상 플레이에서 거의 0 (핵 의심용), 빗나감은 허공 공격이라 정상 플레이에서도 생김
 	const SkillRejectStats& r = _skillRejects;
@@ -215,6 +245,8 @@ void Room::LogStats(uint64 now)
 	_sentBytes = 0;
 	_viewSpawned = 0;
 	_viewDespawned = 0;
+	_skillHits = 0;
+	_skillWorkUs = 0;
 	_skillRejects = {};
 	_skillMisses = {};
 }
@@ -648,8 +680,19 @@ void Room::HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 butt
 //   1~3에 걸리면 거절: 이유별 횟수만 세고 끝 (클라에는 아무것도 안 보냄, 쿨타임/MP 안 씀)
 //   4~6에 걸리면 대상 필수 스킬은 거절, 아니면 빗나감 (S_SKILL target 0, 쿨타임은 씀)
 //   통과하면 쿨타임과 MP를 쓰고 S_SKILL -> 맞았으면 데미지
+// 범위({ })가 끝날 때 소멸자가 걸린 시간을 total에 더함 (RAII: 중간에 return해도 소멸자는 반드시 불림)
+struct ScopedTimerUs
+{
+	uint64&	total;
+	chrono::steady_clock::time_point	start = chrono::steady_clock::now();
+	~ScopedTimerUs() { total += chrono::duration_cast<chrono::microseconds>(chrono::steady_clock::now() - start).count(); }
+};
+
 void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 {
+	// 이 함수 전체(브로드캐스트 포함)에 쓴 시간. 틱 밖의 잡이라 work에 안 잡혀서 따로 셈
+	ScopedTimerUs timer{ _skillWorkUs };
+
 	// 요청이 줄에서 기다리는 사이 이미 Leave가 처리된 플레이어
 	if (_players.find(player->GetObjectId()) == _players.end())
 		return;
@@ -726,6 +769,7 @@ void Room::HandleSkill(PlayerRef player, int32 skillId, uint64 targetId)
 	if (target == nullptr)
 		return;		// 빗나감: 데미지 없음
 
+	_skillHits++;
 	HitMonster(target, player->GetObjectId(), skill->damage);
 }
 
@@ -807,14 +851,13 @@ void Room::ResetInputCounts()
 }
 
 // 1초마다 플레이어 스탯 갱신 (자연 회복). 계산은 Player::Regen, 누구에게 보낼지는 여기서
-//   _players를 도는 중에 BroadcastHp도 _players를 돌지만 둘 다 읽기만 해서 안전 (넣거나 빼면 안 됨)
 void Room::UpdatePlayerStats()
 {
 	for (auto& [id, player] : _players)
 	{
 		const Player::RegenResult result = player->Regen();
 		if (result.hpChanged)
-			BroadcastHp(*player, 0, 0);	// HP는 모두가 보는 정보 -> 전체
+			player->hpDirty = true;		// HP는 모두가 보는 정보 -> 틱 끝 FlushHpChanges가 보는 사람에게 (Regen이 값은 이미 바꿈)
 		if (result.mpChanged)
 			SendMp(player);				// MP는 본인만
 	}
@@ -921,17 +964,63 @@ void Room::RejectInput(PlayerRef player, uint32 seq, const char* reason)
 		<< ", seq " << seq << ", reason " << reason;
 }
 
-// target의 HP를 깎고(0 아래로는 안 내려감) 모두에게 알림. 죽음 처리는 호출한 쪽에서 (HandleSkill / HitPlayer)
+// target의 HP를 깎음(0 아래로는 안 내려감). 죽음 처리는 호출한 쪽에서 (HitMonster / HitPlayer)
 //   HP는 GameObject(ObjectInfo)에 있으므로 Monster / Player 구분 없이 GameObject로 받음
+//   보내는 것
+//     데미지 숫자: 바로, 당사자에게만 (때린 플레이어 = 내가 준 데미지, 맞은 플레이어 = 내가 받은 데미지)
+//     HP바:        SetHp가 hpDirty를 켜면 틱 끝 FlushHpChanges가 간격마다 보는 사람 전원에게 한 번
+//   -> 400명이 보스를 때려도 보스 HP 송신은 "맞은 횟수 x 400"이 아니라 "간격당 400"
 void Room::ApplyDamage(GameObject& target, uint64 attackerId, int32 damage)
 {
-	Protocol::StatInfo* stat = target.GetStatInfo();
-	int32 hp = stat->hp() - damage;
+	int32 hp = target.GetStatInfo()->hp() - damage;
 	if (hp < 0)
 		hp = 0;		// std::max는 Windows.h의 max 매크로와 부딪혀서 안 씀
-	stat->set_hp(hp);
+	SetHp(target, hp);
 
-	BroadcastHp(target, damage, attackerId);
+	SendBufferRef sendBuffer = MakeHpPacket(target, damage, attackerId);
+	if (PlayerRef attacker = FindPlayer(attackerId))
+		SendTo(attacker, sendBuffer);
+	// if (초기화; 조건): victim은 이 if 안에서만 쓰는 변수 (C++17)
+	if (PlayerRef victim = FindPlayer(target.GetObjectId()); victim != nullptr && victim->GetObjectId() != attackerId)
+		SendTo(victim, sendBuffer);
+}
+
+// HP를 바꾸는 한 입구: 값 + "아직 안 보냄" 표시. 보는 사람에게는 틱 끝 FlushHpChanges가 간격마다 한 번
+//   확장: 지속 데미지, 회복 스킬, 물약도 이것만 부르면 HP바가 맞음
+void Room::SetHp(GameObject& target, int32 hp)
+{
+	target.GetStatInfo()->set_hp(hp);
+	target.hpDirty = true;
+}
+
+// 틱 끝 (UpdateViews 다음): HP가 바뀐 객체를 간격마다 한 번, 마지막 값만 (damage 0, attacker 0 = HP바만)
+//   objectId를 더해서 객체마다 다른 틱에 보냄 (모든 객체가 같은 틱에 몰리지 않게, 시야 재선정과 같은 방식)
+//   hpDirty는 보낼 때까지 그대로 -> 사이 틱에 여러 번 바뀌어도 다음 차례에 한 번
+//   죽은 몬스터는 KillMonster가 _monsters에서 빼서 여기 안 옴 (죽음은 S_DIE가 바로 감)
+void Room::FlushHpChanges()
+{
+	auto flush = [&](GameObject& object)
+		{
+			if (object.hpDirty == false)
+				return;
+			if ((_tick + object.GetObjectId()) % HpSyncIntervalFor(object) != 0)
+				return;
+			object.hpDirty = false;
+			BroadcastToViewers(object, MakeHpPacket(object, 0, 0));
+		};
+
+	for (auto& [id, player] : _players)
+		flush(*player);
+	for (auto& [id, monster] : _monsters)
+		flush(*monster);
+}
+
+// HP바 갱신 간격 (틱). 지금은 모두 같음
+//   확장 지점: 종류별로 (보스는 길게, 파티원은 매 틱 등) -> 이 함수 하나만 고치면 됨
+uint64 Room::HpSyncIntervalFor(GameObject& object)
+{
+	(void)object;
+	return HP_SYNC_INTERVAL_TICKS;
 }
 
 // 채팅 내용 검사. 문제가 있으면 거절 이유, 없으면 nullptr
@@ -1012,15 +1101,15 @@ void Room::BroadcastSkill(GameObject& caster, const SkillData& skill, uint64 tar
 	BroadcastToViewers(caster, ClientPacketHandler::MakeSendBuffer(pkt));
 }
 
-// target의 지금 HP를 target이 보이는 사람에게. 데미지(ApplyDamage)와 회복(Monster가 스폰에 도착) 공통
-void Room::BroadcastHp(GameObject& target, int32 damage, uint64 attackerId)
+// S_CHANGE_HP: target의 지금 HP. 데미지 숫자(ApplyDamage, 당사자에게)와 HP바(FlushHpChanges, damage 0)가 같이 씀
+SendBufferRef Room::MakeHpPacket(GameObject& target, int32 damage, uint64 attackerId)
 {
 	Protocol::S_CHANGE_HP pkt;
 	pkt.set_object_id(target.GetObjectId());
 	pkt.set_hp(target.GetStatInfo()->hp());
 	pkt.set_damage(damage);
 	pkt.set_attacker_id(attackerId);
-	BroadcastToViewers(target, ClientPacketHandler::MakeSendBuffer(pkt));
+	return ClientPacketHandler::MakeSendBuffer(pkt);
 }
 
 // 몬스터 죽음: 보던 사람에게 알리고, 방에서 빼고, 같은 스폰 줄로 리스폰 예약
@@ -1446,12 +1535,32 @@ void Room::SendSpawns(const PlayerRef& player, const Protocol::S_SPAWN& all)
 
 // 방에서 나가는 패킷은 전부 여기를 지남 -> 송신량 통계도 여기서 셈
 //   Room 잡큐 안에서만 불리므로(한 번에 한 스레드) 카운터는 atomic이 아니어도 됨
+//   큐에 넣기만 하고(PushSend) 실제 WSASend는 틱 끝 FlushSends에서 세션마다 한 번
+//     -> 한 틱에 같은 사람에게 패킷이 여러 개 가도 시스템 호출은 한 번 (틱 밖에서 생긴 패킷은 최대 한 틱 늦게 감)
 void Room::SendTo(PlayerRef player, SendBufferRef sendBuffer)
 {
 	if (GameSessionRef session = player->GetSession())
 	{
 		_sentPackets++;
 		_sentBytes += sendBuffer->WriteSize();
-		session->Send(sendBuffer);
+		if (session->flushPending == false)		// 한 세션은 목록에 한 번만
+		{
+			session->flushPending = true;
+			_pendingFlush.push_back(session);
+		}
+		session->PushSend(sendBuffer);
 	}
+}
+
+// 틱 맨 끝: 이번 틱에 PushSend한 세션마다 FlushSend 한 번 (쌓인 패킷을 WSASend 한 번으로)
+//   _pendingFlush가 GameSessionRef(shared_ptr)를 들고 있어서 틱 사이에 끊겨도 세션 객체는 여기까지 살아 있음
+//   끊긴 세션이면 FlushSend가 연결 여부를 보고 그냥 끝남
+void Room::FlushSends()
+{
+	for (GameSessionRef& session : _pendingFlush)
+	{
+		session->flushPending = false;
+		session->FlushSend();
+	}
+	_pendingFlush.clear();	// 크기만 0으로 (잡아 둔 메모리는 다음 틱에 재사용)
 }

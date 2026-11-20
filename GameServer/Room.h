@@ -34,6 +34,7 @@ class Room : public JobQueue
 	static constexpr int32	LOAD_SPAWN_ID_BASE = 100000;	// 부하 테스트 스폰 줄 번호 (기획 데이터 spawn_id와 안 겹치게)
 	static constexpr int32	LOAD_RESPAWN_MS = 10000;
 	static constexpr uint32	LOAD_MONSTER_SEED = 12345;		// 고정 -> 매번 같은 배치
+	static constexpr int32	LOAD_BOSS_SPAWN_ID = 900000;	// 부하 테스트 보스 스폰 줄 번호 (기획 데이터, 부하 몬스터와 안 겹치게)
 	// 시야 (AOI): 이 거리 안에 들어오면 S_SPAWN, 나가는 거리 밖으로 가면 S_DESPAWN. 사이에서는 그대로 (경계에서 깜빡임 방지)
 	//   들어오는 반경은 상호작용 거리보다 커야 함 (원거리 스킬 10m + 여유 1m, 몬스터 추적 포기 12m)
 	static constexpr float	VIEW_ENTER_RADIUS = 30.f;
@@ -51,6 +52,8 @@ class Room : public JobQueue
 	static constexpr float	LOD_MID_RADIUS = 20.f;				// 이 안은 LOD_MID_INTERVAL_TICKS마다, 밖은 LOD_FAR_INTERVAL_TICKS마다
 	static constexpr uint64	LOD_MID_INTERVAL_TICKS = 2;			// 100ms
 	static constexpr uint64	LOD_FAR_INTERVAL_TICKS = 4;			// 200ms (그 사이는 클라가 dir * speed로 예측)
+	// HP바: 맞을 때마다가 아니라 바뀐 객체를 간격마다 한 번 (보스를 400명이 때려도 보스 HP 송신은 간격당 보는 사람 수만큼)
+	static constexpr uint64	HP_SYNC_INTERVAL_TICKS = 2;			// 100ms. 사이는 클라가 보간. 데미지 숫자(당사자)와 죽음(S_DIE)은 이와 상관없이 바로
 	// 바닥 드랍
 	static constexpr int32	DEFAULT_MAX_DROPS = 500;	// 방 전체 상한 기본값. 넘으면 가장 오래된 것부터 지움 (몬스터가 아주 많을 때 대비)
 	static constexpr float	DROP_SCATTER_RADIUS = 1.f;	// 몬스터 자리에서 이 반경 안에 흩뿌림 (m)
@@ -98,6 +101,7 @@ public:
 	void	SetMonsterSendPolicy(const MoveSendPolicy* policy);	// Start 전에 main에서 한 번
 	void	SetSaveInterval(uint64 seconds);	// 주기 저장 간격 (Start 전에 main에서 한 번, 기본 60초)
 	void	SetLoadMonsters(int32 count, float area);	// 부하 테스트용 몬스터 추가 (Start 전에 main에서 한 번, 기본 0마리)
+	void	SetLoadBoss(int32 monsterId) { _loadBossType = monsterId; }	// 부하 테스트용 보스 종류 (Start 전에 main에서 한 번, 0이면 없음)
 	void	SetDropLifetime(uint64 seconds);			// 바닥 드랍 수명 (Start 전에 main에서 한 번, 기본 60초)
 	void	SetMaxDrops(int32 count);					// 바닥 드랍 상한 (Start 전에 main에서 한 번, 0 이하면 기본 500 그대로)
 	void	SetMaxVisiblePlayers(int32 count);			// 보이는 다른 플레이어 상한 (Start 전에 main에서 한 번, 0 이하면 기본 50 그대로)
@@ -113,7 +117,7 @@ public:
 	// 몬스터 AI가 쓰는 조회/알림 (Room JobQueue 안, 틱 도중에만 호출)
 	PlayerRef	FindPlayer(uint64 objectId);
 	PlayerRef	FindNearestPlayer(float x, float z, float range);
-	void		BroadcastHp(GameObject& target, int32 damage, uint64 attackerId);	// target의 지금 HP를 target이 보이는 사람에게 (데미지, 회복 공통)
+	void		SetHp(GameObject& target, int32 hp);								// HP를 바꾸는 한 입구: 값 + hpDirty (보는 사람에게는 FlushHpChanges가 간격마다)
 	void		BroadcastSkill(GameObject& caster, const SkillData& skill, uint64 targetId);	// S_SKILL (플레이어, 몬스터 공통)
 	void		HitPlayer(const PlayerRef& target, uint64 attackerId, int32 damage);			// 데미지 + HP 0이면 KillPlayer
 	void		HitMonster(const MonsterRef& target, uint64 attackerId, int32 damage);		// 데미지 + HP 0이면 KillMonster, 아니면 어그로 (몬스터를 때리는 길은 전부 여기로)
@@ -121,6 +125,7 @@ public:
 private:
 	void	SpawnMonsters();
 	void	SpawnLoadMonsters();								// 부하 테스트용 (SetLoadMonsters로 정한 수만큼)
+	void	SpawnLoadBoss();									// 부하 테스트용 보스 한 마리 (SetLoadBoss로 정한 종류, (0, 0))
 	void	SpawnMonster(MonsterSpawnData spawn);				// 한 마리 생성 + S_SPAWN. 시작할 때와 리스폰 때 같이 씀
 	void	KillMonster(MonsterRef monster, uint64 killerId);	// 방에서 빼기 + S_DIE + 처치 보상 + 리스폰 예약
 	void	GiveExp(uint64 killerId, int32 amount);				// 처치 경험치: 처치자에게 S_CHANGE_EXP, 레벨업이면 주변에 S_LEVEL_UP
@@ -133,7 +138,10 @@ private:
 	void	ExpireDrops();										// 1초마다: 수명이 지난 드랍 제거
 	void	KillPlayer(const PlayerRef& player, uint64 killerId);	// 방에 남김(시체) + 정지 + S_DIE + 부활 예약
 	void	RevivePlayer(uint64 playerId);						// 부활 (KillPlayer의 DoTimer). id로 받음: 그사이 나갔으면 못 찾고 끝
-	void	ApplyDamage(GameObject& target, uint64 attackerId, int32 damage);
+	void	ApplyDamage(GameObject& target, uint64 attackerId, int32 damage);	// HP 깎기 + 데미지 숫자를 당사자(때린 / 맞은 플레이어)에게만 바로
+	SendBufferRef	MakeHpPacket(GameObject& target, int32 damage, uint64 attackerId);	// S_CHANGE_HP (target의 지금 HP)
+	void	FlushHpChanges();												// 틱 끝: hpDirty인 객체를 간격마다 보는 사람에게 (damage 0 = HP바만)
+	uint64	HpSyncIntervalFor(GameObject& object);							// HP바 갱신 간격 (틱). 확장: 종류별 (보스는 길게, 파티원은 매 틱 등)
 	void	Tick();
 	void	LogStats(uint64 now);
 	void	ResetInputCounts();
@@ -160,7 +168,8 @@ private:
 	void	BroadcastToViewers(GameObject& object, SendBufferRef sendBuffer);	// object가 보이는 사람에게 (본인 포함)
 	void	SendMoves(const PlayerRef& player, Protocol::S_MOVE& all);				// 큰 S_MOVE를 나눠서 한 명에게
 	void	SendSpawns(const PlayerRef& player, const Protocol::S_SPAWN& all);	// 큰 S_SPAWN을 나눠서 한 명에게
-	void	SendTo(PlayerRef player, SendBufferRef sendBuffer);
+	void	SendTo(PlayerRef player, SendBufferRef sendBuffer);	// 큐에 넣기만 (PushSend) + 이번 틱 보낼 목록에 기록
+	void	FlushSends();										// 틱 맨 끝: 목록의 세션마다 FlushSend (WSASend 한 번)
 
 private:
 	xunordered_map<uint64, PlayerRef>	_players;	// JobQueue 안에서만 접근 -> 락 없음
@@ -169,6 +178,7 @@ private:
 	uint64	_dropLifetimeTicks = 60 * TICKS_PER_SECOND;	// 드랍 수명 (--drop-lifetime-sec, 테스트에서 짧게)
 	int32	_maxDrops = DEFAULT_MAX_DROPS;				// 드랍 상한 (--max-drops, 테스트에서 작게)
 	int32	_maxVisiblePlayers = DEFAULT_MAX_VISIBLE_PLAYERS;	// 보이는 다른 플레이어 상한 (--max-visible-players)
+	xvector<GameSessionRef>	_pendingFlush;		// 이번 틱에 PushSend한 세션 (틱 끝 FlushSends가 비움)
 	xvector<ViewCandidate>	_viewCandidates;	// SelectVisiblePlayers가 매번 다시 채우는 작업용 목록 (멤버로 둬서 플레이어마다, 틱마다 메모리를 새로 잡지 않음)
 	std::mt19937	_rng{ std::random_device{}() };		// 드랍 확률, 골드 양, 흩뿌릴 자리 (Room 줄에서만 써서 하나로 충분)
 
@@ -184,6 +194,7 @@ private:
 	// 부하 테스트용 몬스터 (--load-monsters, --load-area). 기획 데이터(data_monster_spawn)와 별도로 SpawnMonsters에서 추가
 	int32	_loadMonsterCount = 0;
 	float	_loadMonsterArea = 0.f;
+	int32	_loadBossType = 0;		// --load-boss <monster_id>. 0이면 없음
 
 	// 10초(200틱) 통계 -> LogStats에서 출력 후 0으로
 	uint64	_workTimeSumUs = 0;		// 틱 처리 시간 합 (마이크로초)
@@ -193,6 +204,8 @@ private:
 	uint64	_sentBytes = 0;			// 보낸 바이트 수 (패킷 헤더 포함)
 	uint64	_viewSpawned = 0;		// UpdateView에서 S_SPAWN에 넣은 항목 수 (새로 보이게 됨: 상한 안으로 들어옴 + 반경 안으로 들어옴)
 	uint64	_viewDespawned = 0;		// UpdateView에서 S_DESPAWN에 넣은 항목 수 (안 보이게 됨: 상한 밖으로 밀림 + 반경 밖으로 나감)
+	uint64	_skillHits = 0;			// 플레이어 스킬이 몬스터를 맞힌 횟수 (HandleSkill -> HitMonster)
+	uint64	_skillWorkUs = 0;		// HandleSkill에 쓴 시간 (틱 밖에서 도는 잡이라 work에 안 잡힘. 보스전에서 브로드캐스트 비용을 보려고)
 	SkillRejectStats	_skillRejects;	// 스킬 요청 거절 이유별 횟수
 	TargetFailStats		_skillMisses;	// 빗나감 이유별 횟수 (S_SKILL target 0으로 나간 것)
 };

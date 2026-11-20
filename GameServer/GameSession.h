@@ -23,6 +23,9 @@ public:
 	// 입장 실패: S_ENTER_GAME{success=false, error} 응답 + 다시 시도할 수 있게 표시를 풂 (연결은 유지)
 	void		FailEnter(Protocol::EnterGameError error);
 
+	// Room이 이번 틱에 이 세션에 PushSend했는지 (Room::_pendingFlush에 한 번만 넣으려고). Room 잡큐에서만 만짐 -> 락 없음
+	bool		flushPending = false;
+
 private:
 	Lock			_playerLock;		// _player, _closed 보호 (ServerCore의 Lock: 데드락 탐지 포함)
 	PlayerRef		_player;			// 입장 전에는 nullptr

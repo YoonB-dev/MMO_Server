@@ -2,6 +2,8 @@
 #   .\Test\Load\Run-Load.ps1 -Players 100 -Monsters 300 -Label baseline
 #   .\Test\Load\Run-Load.ps1 -Players 50 -NoRecord        기록 확인용 (results.csv에 안 남김)
 #   .\Test\Load\Run-Load.ps1 -Build ...                   Release 빌드부터 (GameServer, DummyClient, OutGameServer)
+#   .\Test\Load\Run-Load.ps1 -Boss -Monsters 0 -Area 15 -Label boss-before
+#                                                         보스전: (0, 0)에 TestBoss(HP 5천만) + 봇이 모두 보스에게 붙어서 기본 공격
 #   스크립트 실행이 막혀 있으면: powershell -ExecutionPolicy Bypass -File .\Test\Load\Run-Load.ps1 ...
 #
 # 순서: DB 준비 -> OutGameServer + GameServer(--load-monsters) -> 봇 입장 -> 워밍업(맵에 흩어지는 시간) -> 측정 -> 정리
@@ -26,7 +28,8 @@ param(
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
     [switch]$Build,
-    [switch]$NoRecord
+    [switch]$NoRecord,
+    [switch]$Boss           # 보스전 (GameServer --load-boss 2, DummyClient --bot-attack). results.csv에는 열이 따로 없어서 -Label로 구분
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,6 +43,12 @@ Initialize-TestContext -Configuration $Configuration -LogDir $runDir
 
 $serverArgs = "--load-monsters $Monsters --load-area $Area"
 $botArgs    = "--count $Players --account-prefix load --no-ping --bot --area $Area"
+$bossType   = 2     # Database/Data/monster.sql의 TestBoss
+if ($Boss)
+{
+    $serverArgs += " --load-boss $bossType"
+    $botArgs    += ' --bot-attack'
+}
 
 # ==================== 측정 환경 (env.txt) ====================
 
@@ -65,7 +74,7 @@ $envLines = @(
     "server args   $serverArgs"
     "bot args      $botArgs"
     "players       $Players"
-    "monsters      $Monsters (+ data_monster_spawn)"
+    "monsters      $Monsters (+ data_monster_spawn)$(if ($Boss) { " + boss (type $bossType) at (0, 0)" })"
     "area          +-$Area m"
     "warmup        $WarmupSec s"
     "measure       $MeasureSec s"
@@ -82,8 +91,11 @@ if ($dirty) { Write-Host 'WARNING: uncommitted changes - this result cannot be t
 $roomPattern = '\[Room\] tick (\d+), avg interval ([\d.e+-]+)ms, work avg ([\d.e+-]+)ms max ([\d.e+-]+)ms, ' +
                'monster moves (\d+) \([^)]*\), players (\d+), monsters (\d+), sent (\d+) packets (\d+) KB'
 
+$hitPattern = '\[Room\] skill hits (\d+), skill work ([\d.e+-]+) ms'   # 플레이어 스킬 명중 수와 HandleSkill 처리 시간 (10초 구간, 명중 0이면 안 찍힘)
+
 $samples   = New-Object System.Collections.Generic.List[object]
 $roomRows  = @()
+$hitRows   = @()
 $entered   = 0
 $alive     = $false
 
@@ -154,6 +166,9 @@ try
             }
         }
     })
+    $hitRows = @(Get-Content $serverLog | Select-Object -Skip $skipLines | ForEach-Object {
+        if ($_ -match $hitPattern) { [pscustomobject]@{ Hits = [double]$Matches[1]; WorkMs = [double]$Matches[2] } }
+    })
 }
 finally
 {
@@ -168,7 +183,9 @@ function Get-Avg { param($Values) if ($null -eq $Values -or @($Values).Count -eq
 function Get-Max { param($Values) if ($null -eq $Values -or @($Values).Count -eq 0) { return 0 } return ($Values | Measure-Object -Maximum).Maximum }
 function Round2  { param([double]$Value) return [math]::Round($Value, 2) }
 
-$roomSec = $roomRows.Count * 10   # [Room] 한 줄 = 10초(200틱) 구간
+# [Room] 한 줄 = 200틱 구간. 틱이 밀리면 10초보다 길어지므로 실제 길이 = 200틱 x 그 줄의 평균 틱 간격
+#   (10초로 치면 틱이 321ms로 밀린 보스전 400명에서 초당 값이 6.4배 부풀려짐)
+$roomSec = ($roomRows | ForEach-Object { 200 * $_.IntervalMs / 1000 } | Measure-Object -Sum).Sum
 $result = [ordered]@{
     date                 = $started.ToString('yyyy-MM-dd HH:mm')
     label                = $Label
@@ -200,7 +217,16 @@ $result = [ordered]@{
 
 $summary = @("run $runName", '') + ($result.GetEnumerator() | ForEach-Object { '{0,-22} {1}' -f $_.Key, $_.Value })
 $summary += ''
-$summary += "[Room] lines used ($($roomRows.Count), each = 10 s; the first one may start up to 10 s before the measure window):"
+if ($Boss)
+{
+    # [Room] 줄과 같은 10초 구간 (results.csv에는 열이 없어서 summary에만)
+    $hitsPerSec   = if ($roomSec) { [math]::Round(($hitRows.Hits | Measure-Object -Sum).Sum / $roomSec) } else { 0 }
+    $skillMsPerSec = if ($roomSec) { Round2 (($hitRows.WorkMs | Measure-Object -Sum).Sum / $roomSec) } else { 0 }
+    $summary += "skill hits/s           $hitsPerSec (boss fight: player basic attacks that hit)"
+    $summary += "skill work ms/s        $skillMsPerSec (time in HandleSkill per second, outside the tick work; 1000 = Room thread busy all the time)"
+    $summary += ''
+}
+$summary += "[Room] lines used ($($roomRows.Count), each = 200 ticks = 10 s at 50 ms, $([math]::Round($roomSec)) s in total; the first one may start before the measure window):"
 $summary += $roomRows | ForEach-Object {
     "  interval $($_.IntervalMs)ms, work avg $($_.WorkAvgMs)ms max $($_.WorkMaxMs)ms, players $($_.Players), monsters $($_.Monsters), sent $($_.Packets) packets $($_.KB) KB"
 }

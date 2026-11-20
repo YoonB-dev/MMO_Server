@@ -229,6 +229,17 @@ void ApplyLoadMonsterOptions(int argc, char* argv[])
 	GRoom->SetLoadMonsters(count, area);
 }
 
+// GameServer.exe [--load-boss <monster_id>]  (부하 테스트용 보스 한 마리를 (0, 0)에. 기본 0 = 없음)
+//   몬스터 번호를 받음: 나중에 다른 보스 종류도 같은 옵션으로 잴 수 있게 (지금은 data_monster의 TestBoss = 2)
+void ApplyLoadBossOption(int argc, char* argv[])
+{
+	for (int32 i = 1; i + 1 < argc; i++)
+	{
+		if (string(argv[i]) == "--load-boss")
+			GRoom->SetLoadBoss(::atoi(argv[i + 1]));
+	}
+}
+
 // 시작 순서 (메인 스레드)
 //   설정(config.ini) -> 토큰 검증기([Auth]) -> DB 접속 + 확인 쿼리 -> 기획 데이터 로드(LoadGameData)
 //   -> DB 큐 생성 -> Room 생성, 몬스터 스폰, 첫 틱 예약 -> 서버 열기(listen) -> 워커 스레드
@@ -265,6 +276,7 @@ int main(int argc, char* argv[])
 	GRoom->SetMaxVisiblePlayers(ParseMaxVisiblePlayers(argc, argv));
 	ApplyInventorySize(argc, argv);
 	ApplyLoadMonsterOptions(argc, argv);
+	ApplyLoadBossOption(argc, argv);
 	GRoom->Start();
 
 	ServerServiceRef service = StartServerService();
