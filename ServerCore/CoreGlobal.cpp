@@ -38,14 +38,14 @@ public:
 	~CoreGlobal()
 	{
 		delete GThreadManager;
-		delete GMemory;
-		delete GSendBufferManager;
-		delete GGlobalQueue;
-		delete GJobTimer;
-		delete GDeadLockProfiler;
-		delete GDBConnectionPool;
-		delete GConfigManager;
 		SocketUtils::Clear();
+		delete GConfigManager;
+		delete GDBConnectionPool;
+		delete GJobTimer;
+		delete GGlobalQueue;
+		delete GSendBufferManager;
+		delete GDeadLockProfiler;
+		delete GMemory;
 	}
 private:
 } GCoreGlobal;

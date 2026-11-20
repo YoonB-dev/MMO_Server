@@ -18,21 +18,42 @@ Session::~Session()
 	SocketUtils::Close(_socket);
 }
 
+// 넣고 바로 보내기 시작 (원래 동작 그대로)
 void Session::Send(SendBufferRef sendBuffer)
+{
+	PushSend(sendBuffer);
+	FlushSend();
+}
+
+// 큐에 넣기만 함. WSASend(시스템 호출)는 FlushSend에서
+//   많이 보내는 쪽(GameServer Room)이 틱 동안 넣기만 하고 틱 끝에 세션마다 FlushSend 한 번
+//   -> 한 틱에 패킷이 여러 개여도 WSASend는 세션당 한 번 (RegisterSend가 큐 전체를 WSABUF 배열로 묶어 보냄)
+//   이미 보내는 중이면 ProcessSend(완료)가 큐에 남은 걸 이어서 보냄 -> FlushSend를 안 불러도 빠지지 않음
+void Session::PushSend(SendBufferRef sendBuffer)
 {
 	if (IsConnected() == false)
 	{
 		return;
-	} 
+	}
+
+	WRITE_LOCK;
+	_sendQueue.push(sendBuffer);
+}
+
+// 큐에 쌓인 게 있고 지금 보내는 중이 아니면 보내기 시작
+//   exchange(true): 바꾸기 전 값을 돌려줌 -> false였던 한 스레드만 RegisterSend (WSASend가 겹치지 않게)
+void Session::FlushSend()
+{
+	if (IsConnected() == false)
+	{
+		return;
+	}
 
 	bool registerSend = false;
 
 	{
-		// 현재 register send가 걸리지 않은 상태면 걸어준다..?
 		WRITE_LOCK;
-		_sendQueue.push(sendBuffer);
-		// 변경전 값을 반환하게 된다.
-		if (_sendRegistered.exchange(true) == false)
+		if (_sendQueue.empty() == false && _sendRegistered.exchange(true) == false)
 		{
 			registerSend = true;
 		}
@@ -132,7 +153,6 @@ bool Session::RegisterConnect()
 
 bool Session::RegisterDisConnect()
 {
-	cout << "123123123" << endl;
 	_disConnectEvent.Init();
 	_disConnectEvent.eventType = EventType::DisConnect;
 	_disConnectEvent.owner = shared_from_this(); // ADD_REF

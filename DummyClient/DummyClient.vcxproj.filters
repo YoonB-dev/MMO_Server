@@ -24,6 +24,9 @@
     <ClCompile Include="ServerSession.cpp">
       <Filter>Main</Filter>
     </ClCompile>
+    <ClCompile Include="AuthClient.cpp">
+      <Filter>Main</Filter>
+    </ClCompile>
     <ClCompile Include="ServerPacketHandler.cpp">
       <Filter>Packet</Filter>
     </ClCompile>
@@ -42,6 +45,9 @@
       <Filter>Utils</Filter>
     </ClInclude>
     <ClInclude Include="ServerSession.h">
+      <Filter>Main</Filter>
+    </ClInclude>
+    <ClInclude Include="AuthClient.h">
       <Filter>Main</Filter>
     </ClInclude>
     <ClInclude Include="ServerPacketHandler.h">

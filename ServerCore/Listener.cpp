@@ -38,11 +38,6 @@ bool Listener::StartAccept(ServerServiceRef server)
 		return false;
 	}
 
-	if (SocketUtils::SetReuseAddr(_listenSocket, true) == false)
-	{
-		return false;
-	}
-
 	if (SocketUtils::SetLinger(_listenSocket, 0, 0) == false)
 	{
 		return false;

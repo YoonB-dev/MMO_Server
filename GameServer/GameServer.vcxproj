@@ -90,7 +90,15 @@
     <ClCompile Include="GameServer.cpp" />
     <ClCompile Include="GameSession.cpp" />
     <ClCompile Include="GameSessionManager.cpp" />
+    <ClCompile Include="GameObject.cpp" />
+    <ClCompile Include="Monster.cpp" />
+    <ClCompile Include="GameData.cpp" />
+    <ClCompile Include="Room.cpp" />
+    <ClCompile Include="Grid.cpp" />
     <ClCompile Include="ClientPacketHandler.cpp" />
+    <ClCompile Include="MoveSendPolicy.cpp" />
+    <ClCompile Include="JwtVerifier.cpp" />
+    <ClCompile Include="DBQueue.cpp" />
     <ClCompile Include="Enum.pb.cc">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -105,7 +113,18 @@
     <ClInclude Include="pch.h" />
     <ClInclude Include="GameSession.h" />
     <ClInclude Include="GameSessionManager.h" />
+    <ClInclude Include="GameObject.h" />
+    <ClInclude Include="Player.h" />
+    <ClInclude Include="Monster.h" />
+    <ClInclude Include="GameData.h" />
+    <ClInclude Include="Room.h" />
+    <ClInclude Include="Grid.h" />
+    <ClInclude Include="Drop.h" />
     <ClInclude Include="ClientPacketHandler.h" />
+    <ClInclude Include="MoveSendPolicy.h" />
+    <ClInclude Include="JwtVerifier.h" />
+    <ClInclude Include="DBQueue.h" />
+    <ClInclude Include="LogLine.h" />
     <ClInclude Include="Enum.pb.h" />
     <ClInclude Include="Struct.pb.h" />
     <ClInclude Include="Protocol.pb.h" />
