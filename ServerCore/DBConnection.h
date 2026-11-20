@@ -12,6 +12,8 @@ enum
 class DBConnection
 {
 public:
+	~DBConnection();	// Clear()로 핸들 정리 -> xdelete하면 접속까지 끊김
+
 	bool			Connect(SQLHENV henv, const WCHAR* connString);
 	void			Clear();
 
@@ -51,7 +53,9 @@ private:
 	bool			BindParam(SQLUSMALLINT paramIndex, SQLSMALLINT cType, SQLSMALLINT sqlType, SQLULEN len, SQLPOINTER ptr, SQLLEN* index);
 	// 받아올 때 사용하는 인자
 	bool			BindCol(SQLUSMALLINT columnIndex, SQLSMALLINT cType, SQLLEN len, SQLPOINTER value, SQLLEN* index);
-	void			HandleError(SQLRETURN ret);
+	// 에러 메시지는 에러가 난 핸들에서 꺼내야 함: 쿼리 에러 -> STMT, 접속 에러 -> DBC
+	void			HandleError(SQLRETURN ret);	// STMT(_statement)에서 꺼냄
+	void			HandleError(SQLRETURN ret, SQLSMALLINT handleType, SQLHANDLE handle);
 private:
 	// 핸들인데 데이터베이스 커넥션
 	SQLHDBC			_connection = SQL_NULL_HANDLE;

@@ -1,6 +1,9 @@
 syntax = "proto3";
 package Protocol;
 
+import "Enum.proto";
+import "Struct.proto";
+
 // 패킷 이름 규칙: C_ = 클라이언트 -> 서버, S_ = 서버 -> 클라이언트
 // GenPackets는 줄 맨 앞이 'message'인 줄을 위에서부터 읽어 1000번부터 패킷 ID를 붙인다
 //   -> 새 패킷은 맨 아래에 추가 (중간에 넣으면 뒤 패킷 ID가 전부 밀림)
@@ -16,4 +19,196 @@ message C_PING
 message S_PING
 {
 	int64 client_time_us = 1;
+}
+
+// ==================== 입장 / 퇴장 ====================
+// 클라 -> 서버: 입장 요청. 아웃게임 서버(/auth/login)에서 받은 Access Token(JWT)을 같이 보냄
+//   서버는 서명/만료/발급자/대상을 검증하고, 고른 캐릭터(그 계정의 것만)를 DB에서 불러와 입장시킴
+message C_ENTER_GAME
+{
+	string access_token = 1;
+	int64 character_id = 2;	// 로비(아웃게임 GET /characters)에서 고른 캐릭터. 토큰의 계정 캐릭터여야 함
+}
+
+// 서버 -> 클라: 입장 결과. 실패해도 연결은 유지 (토큰을 갱신해서 다시 보낼 수 있게)
+message S_ENTER_GAME
+{
+	bool success = 1;
+	ObjectInfo player = 2;	// 내 캐릭터
+	int32 mp = 3;			// 내 MP. 본인만 보는 정보라 ObjectInfo(다른 사람 S_SPAWN에도 가는 정보)가 아니라 여기에
+	int32 max_mp = 4;
+	EnterGameError error = 5;	// success = false일 때 이유
+	int64 exp = 6;			// 내 경험치 (이번 레벨에서 쌓인 양). 본인만 보는 값
+	int64 exp_to_next = 7;	// 다음 레벨까지 필요한 양 (0 = 최대 레벨). 클라가 레벨표 없이 경험치 바를 그림
+	int64 gold = 8;						// 내 골드 (본인만)
+	reserved 9;							// 예전 inventory (종류별 개수) -> 칸 단위로 바뀌어서 번호를 다시 쓰지 않음
+	repeated InventorySlot inventory = 10;	// 내 인벤토리: 아이템이 있는 칸만 (본인만)
+	int32 inventory_capacity = 11;			// 전체 칸 수 (빈 칸 그리기용). 이름이 inventory_size면 protobuf가 만드는 inventory_size()(repeated 개수)와 겹침
+}
+
+message S_SPAWN
+{
+	repeated ObjectInfo objects = 1;	// 새로 보이게 된 객체들
+}
+
+message S_DESPAWN
+{
+	repeated uint64 object_ids = 1;	// 사라진 객체들
+}
+
+// ==================== 이동 ====================
+// 클라 -> 서버: 이동 의도. 방향/버튼이 바뀔 때만 보냄 (멈추면 방향 0, 0)
+message C_MOVE_INPUT
+{
+	float dir_x = 1;	// 월드 기준 수평 방향 (카메라 기준 변환은 클라가 함)
+	float dir_z = 2;
+	uint32 buttons = 3;	// 비트 플래그. bit0 = 점프 (지금은 무시)
+	uint32 seq = 4;		// 입력 번호 1, 2, 3 ...
+}
+
+// 서버 -> 클라: 한 틱 동안 바뀐 이동을 한 패킷에 묶음
+message S_MOVE
+{
+	uint64 server_tick = 1;
+	repeated MoveEntry moves = 2;
+}
+
+// ==================== 전투 ====================
+// 클라 -> 서버: 스킬 사용 요청. 기본 공격도 스킬 1번으로 취급
+//   타겟은 클라가 고름 (하이라이트한 몬스터). 서버는 믿지 않고 자기 데이터로 다시 검사
+message C_SKILL
+{
+	int32 skill_id = 1;		// 1 = 기본 공격 (Database/Data/skill.sql의 data_skill)
+	uint64 target_id = 2;	// 공격할 몬스터 id
+}
+
+// 서버 -> 클라(전체): 스킬 사용 확정 -> 시전 모션 재생, 시전자 본인은 쿨타임 UI 시작
+//   target_id = 0이면 빗나감/허공: yaw 방향으로 휘두르는 모션만 (데미지 없음)
+//   cast_ms > 0이면 예고 시작 (몬스터 공격): cast_ms 동안 yaw 방향 부채꼴(range, hit_angle)을 바닥에 표시
+//     -> 끝날 때 그 안에 있으면 S_CHANGE_HP가 오고, 피했으면 아무것도 안 옴
+message S_SKILL
+{
+	uint64 object_id = 1;	// 시전자 (플레이어 또는 몬스터)
+	int32 skill_id = 2;
+	uint64 target_id = 3;	// 맞은 대상 / 노리는 대상 (0 = 빗나감)
+	float yaw = 4;			// 시전자가 바라보는 방향 (서버 좌표, 도). 예고 공격이면 판정 방향
+	int32 cast_ms = 5;		// 예고 시간 (0 = 즉시, 이 패킷이 곧 결과)
+	float range = 6;		// 예고 범위 표시용: 부채꼴 반지름 (m)
+	float hit_angle = 7;	// 예고 범위 표시용: 좌우 반각 (도)
+}
+
+// 서버 -> 클라(전체): HP가 바뀜 -> 데미지 숫자, HP바
+message S_CHANGE_HP
+{
+	uint64 object_id = 1;	// 맞은 객체
+	int32 hp = 2;			// 바뀐 뒤 HP
+	int32 damage = 3;		// 이번에 깎인 양 (표시용). 회복(몬스터 복귀, 자연 회복)이면 0
+	uint64 attacker_id = 4;	// 때린 객체 (내가 때린 건지 구분용). 회복이면 0
+}
+
+// 서버 -> 클라(전체): 객체가 죽음 -> 죽는 모션 재생
+//   몬스터(revive_ms 0): 서버에서 이미 사라짐 -> 모션 뒤 클라가 직접 지움 (S_DESPAWN 없음), 리스폰은 새 id로 S_SPAWN
+//   플레이어(revive_ms > 0): 방에 남아 시체로 보임 -> revive_ms 뒤 S_REVIVE
+message S_DIE
+{
+	uint64 object_id = 1;	// 죽은 객체
+	uint64 killer_id = 2;	// 마지막 공격을 한 객체
+	int32 revive_ms = 3;	// 플레이어면 부활까지 남은 시간 (클라 카운트다운), 몬스터면 0
+}
+
+// 서버 -> 클라(본인만): 내 MP가 바뀜 (스킬 사용, 1초마다 자연 회복) -> MP바
+message S_CHANGE_MP
+{
+	int32 mp = 1;	// 바뀐 뒤 MP
+}
+
+// 서버 -> 클라(전체): 죽었던 플레이어가 살아남 -> object의 위치에 다시 세움 (HP는 object.stat_info)
+//   본인 MP는 따로 S_CHANGE_MP로 옴
+message S_REVIVE
+{
+	ObjectInfo object = 1;
+}
+
+// ==================== 채팅 ====================
+// 클라 -> 서버: 채팅 보내기
+//   서버 검사: 범위 값, 빈 문자열/공백만, 100글자 초과, 제어 문자(줄바꿈 등), 0.5초에 한 번
+//   거절되면 아무 응답 없음 (클라도 같은 제한을 걸어서 보통은 안 걸림)
+message C_CHAT
+{
+	ChatChannel channel = 1;
+	string message = 2;		// UTF-8
+}
+
+// 서버 -> 클라(범위 안 전원, 보낸 사람 포함): 채팅. 표시는 "sender_name: message"
+//   보낸 사람도 받음 -> "서버가 받아들였다"는 확인 (S_SKILL과 같은 방식)
+message S_CHAT
+{
+	uint64 object_id = 1;	// 보낸 플레이어 (화면에 보이면 그 캐릭터 위에 말풍선 등)
+	ChatChannel channel = 2;
+	string message = 3;
+	string sender_name = 4;	// 보낸 사람 닉네임 (UTF-8). 방 전체 채팅은 보낸 사람이 내 시야 밖일 수 있어서 이름을 직접 실음
+}
+
+// ==================== 성장 ====================
+// 서버 -> 클라(본인만): 경험치가 바뀜 (몬스터 처치) -> 경험치 바, "+20 EXP"
+message S_CHANGE_EXP
+{
+	int32 level = 1;		// 바뀐 뒤 레벨
+	int64 exp = 2;			// 바뀐 뒤 경험치 (레벨이 올랐으면 넘친 양)
+	int64 exp_to_next = 3;	// 다음 레벨까지 필요한 양 (0 = 최대 레벨)
+	int32 gained = 4;		// 이번에 얻은 양 (표시용)
+}
+
+// 서버 -> 클라(그 플레이어가 보이는 사람, 본인 포함): 레벨업 연출 + 이름표 레벨 갱신
+message S_LEVEL_UP
+{
+	uint64 object_id = 1;
+	int32 level = 2;
+}
+
+// ==================== 줍기 ====================
+// 클라 -> 서버: 줍기 키. 무엇을 주울지는 서버가 고름 (내 주변에서 주울 수 있는 것 중 가장 가까운 것)
+//   주울 게 없으면(멀거나, 이미 누가 주웠거나, 가득 참) 응답 없음
+message C_PICKUP
+{
+}
+
+// 서버 -> 클라(그 드랍을 보던 사람): 누가 주웠음 -> 줍는 연출 후 드랍을 지움 (S_DESPAWN은 따로 안 옴)
+message S_PICKUP
+{
+	uint64 drop_id = 1;
+	uint64 picker_id = 2;
+}
+
+// 서버 -> 클라(본인만): 골드가 바뀜
+message S_CHANGE_GOLD
+{
+	int64 gold = 1;		// 바뀐 뒤 골드
+	int64 gained = 2;	// 이번에 바뀐 양 (표시용 "+12")
+}
+
+// 서버 -> 클라(본인만): 아이템을 얻어서 칸이 바뀜. 한 번에 여러 칸이 바뀔 수 있음 (한 칸이 가득 차면 새 칸, 장비 2개면 두 칸)
+message S_CHANGE_ITEM
+{
+	int32 item_id = 1;
+	reserved 2;						// 예전 count (종류별 개수)
+	int32 gained = 3;					// 이번에 얻은 개수 (알림용)
+	repeated InventorySlot slots = 4;	// 바뀐 칸들의 바뀐 뒤 상태 (그대로 덮어쓰면 됨)
+}
+
+// ==================== 인벤토리 ====================
+// 클라 -> 서버: 인벤토리에서 끌어다 놓기 (from 칸의 아이템을 to 칸으로)
+//   빈 칸이면 옮김 / 다른 아이템이면 서로 바꿈 / 같은 아이템이면 합침 (max_stack까지, 넘치면 from에 남음)
+//   같은 아이템인데 to가 가득이면 서로 바꿈
+message C_MOVE_ITEM
+{
+	int32 from_slot = 1;
+	int32 to_slot = 2;
+}
+
+// 서버 -> 클라(본인만): 이 칸들이 지금 이렇게 됐음 (그대로 덮어쓰면 됨, item_id 0 = 빈 칸)
+//   옮기기 결과, 그리고 거절했을 때 클라가 미리 바꿔 둔 화면을 되돌리는 용도 (두 칸의 서버 값)
+message S_INVENTORY_SLOTS
+{
+	repeated InventorySlot slots = 1;
 }

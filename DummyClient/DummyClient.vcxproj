@@ -81,6 +81,7 @@
     </ClCompile>
     <ClCompile Include="DummyClient.cpp" />
     <ClCompile Include="ServerSession.cpp" />
+    <ClCompile Include="AuthClient.cpp" />
     <ClCompile Include="ServerPacketHandler.cpp" />
     <ClCompile Include="Enum.pb.cc">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -95,6 +96,7 @@
   <ItemGroup>
     <ClInclude Include="pch.h" />
     <ClInclude Include="ServerSession.h" />
+    <ClInclude Include="AuthClient.h" />
     <ClInclude Include="ServerPacketHandler.h" />
     <ClInclude Include="Enum.pb.h" />
     <ClInclude Include="Struct.pb.h" />
