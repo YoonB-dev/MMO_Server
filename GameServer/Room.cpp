@@ -168,6 +168,7 @@ void Room::Tick()
 	UpdateMonsters(pkt);
 	UpdateViews(pkt);
 	FlushHpChanges();	// 시야 다음: 이번 틱에 새로 보인 사람은 S_SPAWN에 지금 HP가 이미 실려 있음
+	FlushSends();		// 맨 끝: 이번 틱(과 지난 틱 이후 잡)에서 쌓인 패킷을 세션마다 WSASend 한 번
 
 	const uint64 workUs = chrono::duration_cast<chrono::microseconds>(chrono::steady_clock::now() - workStart).count();
 	_workTimeSumUs += workUs;
@@ -1534,12 +1535,32 @@ void Room::SendSpawns(const PlayerRef& player, const Protocol::S_SPAWN& all)
 
 // 방에서 나가는 패킷은 전부 여기를 지남 -> 송신량 통계도 여기서 셈
 //   Room 잡큐 안에서만 불리므로(한 번에 한 스레드) 카운터는 atomic이 아니어도 됨
+//   큐에 넣기만 하고(PushSend) 실제 WSASend는 틱 끝 FlushSends에서 세션마다 한 번
+//     -> 한 틱에 같은 사람에게 패킷이 여러 개 가도 시스템 호출은 한 번 (틱 밖에서 생긴 패킷은 최대 한 틱 늦게 감)
 void Room::SendTo(PlayerRef player, SendBufferRef sendBuffer)
 {
 	if (GameSessionRef session = player->GetSession())
 	{
 		_sentPackets++;
 		_sentBytes += sendBuffer->WriteSize();
-		session->Send(sendBuffer);
+		if (session->flushPending == false)		// 한 세션은 목록에 한 번만
+		{
+			session->flushPending = true;
+			_pendingFlush.push_back(session);
+		}
+		session->PushSend(sendBuffer);
 	}
+}
+
+// 틱 맨 끝: 이번 틱에 PushSend한 세션마다 FlushSend 한 번 (쌓인 패킷을 WSASend 한 번으로)
+//   _pendingFlush가 GameSessionRef(shared_ptr)를 들고 있어서 틱 사이에 끊겨도 세션 객체는 여기까지 살아 있음
+//   끊긴 세션이면 FlushSend가 연결 여부를 보고 그냥 끝남
+void Room::FlushSends()
+{
+	for (GameSessionRef& session : _pendingFlush)
+	{
+		session->flushPending = false;
+		session->FlushSend();
+	}
+	_pendingFlush.clear();	// 크기만 0으로 (잡아 둔 메모리는 다음 틱에 재사용)
 }

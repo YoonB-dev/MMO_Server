@@ -168,7 +168,8 @@ private:
 	void	BroadcastToViewers(GameObject& object, SendBufferRef sendBuffer);	// object가 보이는 사람에게 (본인 포함)
 	void	SendMoves(const PlayerRef& player, Protocol::S_MOVE& all);				// 큰 S_MOVE를 나눠서 한 명에게
 	void	SendSpawns(const PlayerRef& player, const Protocol::S_SPAWN& all);	// 큰 S_SPAWN을 나눠서 한 명에게
-	void	SendTo(PlayerRef player, SendBufferRef sendBuffer);
+	void	SendTo(PlayerRef player, SendBufferRef sendBuffer);	// 큐에 넣기만 (PushSend) + 이번 틱 보낼 목록에 기록
+	void	FlushSends();										// 틱 맨 끝: 목록의 세션마다 FlushSend (WSASend 한 번)
 
 private:
 	xunordered_map<uint64, PlayerRef>	_players;	// JobQueue 안에서만 접근 -> 락 없음
@@ -177,6 +178,7 @@ private:
 	uint64	_dropLifetimeTicks = 60 * TICKS_PER_SECOND;	// 드랍 수명 (--drop-lifetime-sec, 테스트에서 짧게)
 	int32	_maxDrops = DEFAULT_MAX_DROPS;				// 드랍 상한 (--max-drops, 테스트에서 작게)
 	int32	_maxVisiblePlayers = DEFAULT_MAX_VISIBLE_PLAYERS;	// 보이는 다른 플레이어 상한 (--max-visible-players)
+	xvector<GameSessionRef>	_pendingFlush;		// 이번 틱에 PushSend한 세션 (틱 끝 FlushSends가 비움)
 	xvector<ViewCandidate>	_viewCandidates;	// SelectVisiblePlayers가 매번 다시 채우는 작업용 목록 (멤버로 둬서 플레이어마다, 틱마다 메모리를 새로 잡지 않음)
 	std::mt19937	_rng{ std::random_device{}() };		// 드랍 확률, 골드 양, 흩뿌릴 자리 (Room 줄에서만 써서 하나로 충분)
 
