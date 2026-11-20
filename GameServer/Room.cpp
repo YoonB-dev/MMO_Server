@@ -167,6 +167,7 @@ void Room::Tick()
 	UpdatePlayers(pkt);
 	UpdateMonsters(pkt);
 	UpdateViews(pkt);
+	FlushHpChanges();	// 시야 다음: 이번 틱에 새로 보인 사람은 S_SPAWN에 지금 HP가 이미 실려 있음
 
 	const uint64 workUs = chrono::duration_cast<chrono::microseconds>(chrono::steady_clock::now() - workStart).count();
 	_workTimeSumUs += workUs;
@@ -849,14 +850,13 @@ void Room::ResetInputCounts()
 }
 
 // 1초마다 플레이어 스탯 갱신 (자연 회복). 계산은 Player::Regen, 누구에게 보낼지는 여기서
-//   _players를 도는 중에 BroadcastHp도 _players를 돌지만 둘 다 읽기만 해서 안전 (넣거나 빼면 안 됨)
 void Room::UpdatePlayerStats()
 {
 	for (auto& [id, player] : _players)
 	{
 		const Player::RegenResult result = player->Regen();
 		if (result.hpChanged)
-			BroadcastHp(*player, 0, 0);	// HP는 모두가 보는 정보 -> 전체
+			player->hpDirty = true;		// HP는 모두가 보는 정보 -> 틱 끝 FlushHpChanges가 보는 사람에게 (Regen이 값은 이미 바꿈)
 		if (result.mpChanged)
 			SendMp(player);				// MP는 본인만
 	}
@@ -963,17 +963,63 @@ void Room::RejectInput(PlayerRef player, uint32 seq, const char* reason)
 		<< ", seq " << seq << ", reason " << reason;
 }
 
-// target의 HP를 깎고(0 아래로는 안 내려감) 모두에게 알림. 죽음 처리는 호출한 쪽에서 (HandleSkill / HitPlayer)
+// target의 HP를 깎음(0 아래로는 안 내려감). 죽음 처리는 호출한 쪽에서 (HitMonster / HitPlayer)
 //   HP는 GameObject(ObjectInfo)에 있으므로 Monster / Player 구분 없이 GameObject로 받음
+//   보내는 것
+//     데미지 숫자: 바로, 당사자에게만 (때린 플레이어 = 내가 준 데미지, 맞은 플레이어 = 내가 받은 데미지)
+//     HP바:        SetHp가 hpDirty를 켜면 틱 끝 FlushHpChanges가 간격마다 보는 사람 전원에게 한 번
+//   -> 400명이 보스를 때려도 보스 HP 송신은 "맞은 횟수 x 400"이 아니라 "간격당 400"
 void Room::ApplyDamage(GameObject& target, uint64 attackerId, int32 damage)
 {
-	Protocol::StatInfo* stat = target.GetStatInfo();
-	int32 hp = stat->hp() - damage;
+	int32 hp = target.GetStatInfo()->hp() - damage;
 	if (hp < 0)
 		hp = 0;		// std::max는 Windows.h의 max 매크로와 부딪혀서 안 씀
-	stat->set_hp(hp);
+	SetHp(target, hp);
 
-	BroadcastHp(target, damage, attackerId);
+	SendBufferRef sendBuffer = MakeHpPacket(target, damage, attackerId);
+	if (PlayerRef attacker = FindPlayer(attackerId))
+		SendTo(attacker, sendBuffer);
+	// if (초기화; 조건): victim은 이 if 안에서만 쓰는 변수 (C++17)
+	if (PlayerRef victim = FindPlayer(target.GetObjectId()); victim != nullptr && victim->GetObjectId() != attackerId)
+		SendTo(victim, sendBuffer);
+}
+
+// HP를 바꾸는 한 입구: 값 + "아직 안 보냄" 표시. 보는 사람에게는 틱 끝 FlushHpChanges가 간격마다 한 번
+//   확장: 지속 데미지, 회복 스킬, 물약도 이것만 부르면 HP바가 맞음
+void Room::SetHp(GameObject& target, int32 hp)
+{
+	target.GetStatInfo()->set_hp(hp);
+	target.hpDirty = true;
+}
+
+// 틱 끝 (UpdateViews 다음): HP가 바뀐 객체를 간격마다 한 번, 마지막 값만 (damage 0, attacker 0 = HP바만)
+//   objectId를 더해서 객체마다 다른 틱에 보냄 (모든 객체가 같은 틱에 몰리지 않게, 시야 재선정과 같은 방식)
+//   hpDirty는 보낼 때까지 그대로 -> 사이 틱에 여러 번 바뀌어도 다음 차례에 한 번
+//   죽은 몬스터는 KillMonster가 _monsters에서 빼서 여기 안 옴 (죽음은 S_DIE가 바로 감)
+void Room::FlushHpChanges()
+{
+	auto flush = [&](GameObject& object)
+		{
+			if (object.hpDirty == false)
+				return;
+			if ((_tick + object.GetObjectId()) % HpSyncIntervalFor(object) != 0)
+				return;
+			object.hpDirty = false;
+			BroadcastToViewers(object, MakeHpPacket(object, 0, 0));
+		};
+
+	for (auto& [id, player] : _players)
+		flush(*player);
+	for (auto& [id, monster] : _monsters)
+		flush(*monster);
+}
+
+// HP바 갱신 간격 (틱). 지금은 모두 같음
+//   확장 지점: 종류별로 (보스는 길게, 파티원은 매 틱 등) -> 이 함수 하나만 고치면 됨
+uint64 Room::HpSyncIntervalFor(GameObject& object)
+{
+	(void)object;
+	return HP_SYNC_INTERVAL_TICKS;
 }
 
 // 채팅 내용 검사. 문제가 있으면 거절 이유, 없으면 nullptr
@@ -1054,15 +1100,15 @@ void Room::BroadcastSkill(GameObject& caster, const SkillData& skill, uint64 tar
 	BroadcastToViewers(caster, ClientPacketHandler::MakeSendBuffer(pkt));
 }
 
-// target의 지금 HP를 target이 보이는 사람에게. 데미지(ApplyDamage)와 회복(Monster가 스폰에 도착) 공통
-void Room::BroadcastHp(GameObject& target, int32 damage, uint64 attackerId)
+// S_CHANGE_HP: target의 지금 HP. 데미지 숫자(ApplyDamage, 당사자에게)와 HP바(FlushHpChanges, damage 0)가 같이 씀
+SendBufferRef Room::MakeHpPacket(GameObject& target, int32 damage, uint64 attackerId)
 {
 	Protocol::S_CHANGE_HP pkt;
 	pkt.set_object_id(target.GetObjectId());
 	pkt.set_hp(target.GetStatInfo()->hp());
 	pkt.set_damage(damage);
 	pkt.set_attacker_id(attackerId);
-	BroadcastToViewers(target, ClientPacketHandler::MakeSendBuffer(pkt));
+	return ClientPacketHandler::MakeSendBuffer(pkt);
 }
 
 // 몬스터 죽음: 보던 사람에게 알리고, 방에서 빼고, 같은 스폰 줄로 리스폰 예약

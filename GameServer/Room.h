@@ -52,6 +52,8 @@ class Room : public JobQueue
 	static constexpr float	LOD_MID_RADIUS = 20.f;				// 이 안은 LOD_MID_INTERVAL_TICKS마다, 밖은 LOD_FAR_INTERVAL_TICKS마다
 	static constexpr uint64	LOD_MID_INTERVAL_TICKS = 2;			// 100ms
 	static constexpr uint64	LOD_FAR_INTERVAL_TICKS = 4;			// 200ms (그 사이는 클라가 dir * speed로 예측)
+	// HP바: 맞을 때마다가 아니라 바뀐 객체를 간격마다 한 번 (보스를 400명이 때려도 보스 HP 송신은 간격당 보는 사람 수만큼)
+	static constexpr uint64	HP_SYNC_INTERVAL_TICKS = 2;			// 100ms. 사이는 클라가 보간. 데미지 숫자(당사자)와 죽음(S_DIE)은 이와 상관없이 바로
 	// 바닥 드랍
 	static constexpr int32	DEFAULT_MAX_DROPS = 500;	// 방 전체 상한 기본값. 넘으면 가장 오래된 것부터 지움 (몬스터가 아주 많을 때 대비)
 	static constexpr float	DROP_SCATTER_RADIUS = 1.f;	// 몬스터 자리에서 이 반경 안에 흩뿌림 (m)
@@ -115,7 +117,7 @@ public:
 	// 몬스터 AI가 쓰는 조회/알림 (Room JobQueue 안, 틱 도중에만 호출)
 	PlayerRef	FindPlayer(uint64 objectId);
 	PlayerRef	FindNearestPlayer(float x, float z, float range);
-	void		BroadcastHp(GameObject& target, int32 damage, uint64 attackerId);	// target의 지금 HP를 target이 보이는 사람에게 (데미지, 회복 공통)
+	void		SetHp(GameObject& target, int32 hp);								// HP를 바꾸는 한 입구: 값 + hpDirty (보는 사람에게는 FlushHpChanges가 간격마다)
 	void		BroadcastSkill(GameObject& caster, const SkillData& skill, uint64 targetId);	// S_SKILL (플레이어, 몬스터 공통)
 	void		HitPlayer(const PlayerRef& target, uint64 attackerId, int32 damage);			// 데미지 + HP 0이면 KillPlayer
 	void		HitMonster(const MonsterRef& target, uint64 attackerId, int32 damage);		// 데미지 + HP 0이면 KillMonster, 아니면 어그로 (몬스터를 때리는 길은 전부 여기로)
@@ -136,7 +138,10 @@ private:
 	void	ExpireDrops();										// 1초마다: 수명이 지난 드랍 제거
 	void	KillPlayer(const PlayerRef& player, uint64 killerId);	// 방에 남김(시체) + 정지 + S_DIE + 부활 예약
 	void	RevivePlayer(uint64 playerId);						// 부활 (KillPlayer의 DoTimer). id로 받음: 그사이 나갔으면 못 찾고 끝
-	void	ApplyDamage(GameObject& target, uint64 attackerId, int32 damage);
+	void	ApplyDamage(GameObject& target, uint64 attackerId, int32 damage);	// HP 깎기 + 데미지 숫자를 당사자(때린 / 맞은 플레이어)에게만 바로
+	SendBufferRef	MakeHpPacket(GameObject& target, int32 damage, uint64 attackerId);	// S_CHANGE_HP (target의 지금 HP)
+	void	FlushHpChanges();												// 틱 끝: hpDirty인 객체를 간격마다 보는 사람에게 (damage 0 = HP바만)
+	uint64	HpSyncIntervalFor(GameObject& object);							// HP바 갱신 간격 (틱). 확장: 종류별 (보스는 길게, 파티원은 매 틱 등)
 	void	Tick();
 	void	LogStats(uint64 now);
 	void	ResetInputCounts();

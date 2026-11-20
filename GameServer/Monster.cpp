@@ -204,10 +204,7 @@ void Monster::UpdateReturn(Room& room, float dt)
 
 	Protocol::StatInfo* stat = GetStatInfo();
 	if (stat->hp() < stat->max_hp())
-	{
-		stat->set_hp(stat->max_hp());
-		room.BroadcastHp(*this, 0, 0);	// 회복: damage 0, attacker 0
-	}
+		room.SetHp(*this, stat->max_hp());	// 회복: 틱 끝에 보는 사람에게 HP바 (damage 0, attacker 0)
 	SetState(MonsterState::Idle);
 }
 
