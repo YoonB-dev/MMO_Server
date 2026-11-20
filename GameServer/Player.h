@@ -11,6 +11,13 @@ struct MoveInput
 	uint32	seq = 0;		// 클라가 붙인 입력 번호 1, 2, 3 ...
 };
 
+// 시야 목록(Player::visible)의 값 하나: 이 플레이어가 그 객체를 언제 확인했고, 그 객체의 이동을 언제 보냈나
+struct ViewEntry
+{
+	uint64	seenTick = 0;	// 마지막으로 "시야 안"이라고 확인한 틱 (매 틱 UpdateView가 지금 틱으로 바꿈. 아니면 S_DESPAWN)
+	uint64	sentTick = 0;	// 이 플레이어에게 그 객체의 이동(또는 S_SPAWN)을 마지막으로 보낸 틱 -> 거리별 갱신 빈도
+};
+
 // 인벤토리 한 칸 (DB player_inventory 한 줄). itemId 0 = 빈 칸
 struct ItemSlot
 {
@@ -268,10 +275,10 @@ public:
 	uint64				pickupReadyTick = 0;	// 이 틱부터 다시 줍기 가능 (스패밍 방지)
 
 	// --- 시야 (Room의 JobQueue 안에서만 접근 -> 락 없음) ---
-	//   지금 이 클라에 보이는 객체 id -> 마지막으로 "시야 안"이라고 확인한 틱
-	//   매 틱 Room::UpdateView가 확인한 것만 지금 틱으로 바꾸고, 지금 틱이 아닌 것(= 이번에 확인 안 됨)은 S_DESPAWN 후 지움
-	//   나 자신은 넣지 않음 (내 이동은 항상 받음)
-	xunordered_map<uint64, uint64>	visible;
+	//   지금 이 클라에 보이는 객체 id -> ViewEntry (언제 확인했나 / 그 객체의 이동을 언제 보냈나)
+	//   매 틱 Room::UpdateView가 확인한 것만 seenTick을 지금 틱으로 바꾸고, 아닌 것(= 이번에 확인 안 됨)은 S_DESPAWN 후 지움
+	//   나 자신은 넣지 않음 (내 이동은 항상 받음). 다른 플레이어는 상한(우선순위 순)까지만 들어감
+	xunordered_map<uint64, ViewEntry>	visible;
 
 	// --- 채팅 (Room의 JobQueue 안에서만 접근 -> 락 없음) ---
 	uint64	chatReadyTick = 0;	// 이 틱부터 다시 채팅 가능 (도배 방지). 0 = 바로 가능
