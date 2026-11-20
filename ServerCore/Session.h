@@ -26,9 +26,7 @@ public:
 	virtual ~Session();
 
 public:
-	void				Send(SendBufferRef sendBuffer);		// PushSend + FlushSend (넣고 바로 보내기 시작)
-	void				PushSend(SendBufferRef sendBuffer);	// 큐에 넣기만 (WSASend 안 함). 나중에 FlushSend로 시작
-	void				FlushSend();						// 큐에 쌓인 게 있고 보내는 중이 아니면 WSASend 시작
+	void				Send(SendBufferRef sendBuffer);
 	bool				Connect();
 	void				Disconnect(const WCHAR* cause);
 

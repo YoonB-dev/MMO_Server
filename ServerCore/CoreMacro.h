@@ -33,7 +33,7 @@
 
 #define CRASH(cause)					\
 {										\
-	volatile uint32* crash = nullptr;			\
+	uint32* crash = nullptr;			\
 	__analysis_assume(crash != nullptr);\
 	*crash = 0xDEADBEEF;				\
 }

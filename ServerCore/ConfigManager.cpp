@@ -80,12 +80,6 @@ bool ConfigManager::LoadConfig(const std::wstring& configPath)
 			currentMap = &serverConfig;
 			continue;
 		}
-		else if (line.front() == '[' && line.back() == ']')
-		{
-			// 그 밖의 섹션([Auth] 등)은 이름 그대로 보관 -> GetString(섹션, 키)로 읽음
-			currentMap = &_sections[line.substr(1, line.size() - 2)];
-			continue;
-		}
 
 		// Key=Value 파싱
 		size_t pos = line.find('=');
@@ -151,14 +145,4 @@ uint16 ConfigManager::GetServerPort()
 int32 ConfigManager::GetWorkerThreadCount()
 {
 	return _workerThreads;
-}
-
-std::string ConfigManager::GetString(const std::string& section, const std::string& key)
-{
-	auto sectionIt = _sections.find(section);
-	if (sectionIt == _sections.end())
-		return "";
-
-	auto it = sectionIt->second.find(key);
-	return (it != sectionIt->second.end()) ? it->second : "";
 }
