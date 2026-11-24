@@ -7,9 +7,10 @@
 #include "Room.h"
 
 // main에서 생성 (GRoom과 같은 이유: 전역 변수 초기화 시점에는 ServerCore의 GMemory가 아직 없을 수 있음)
-shared_ptr<DBQueue> GDBQueue;
+shared_ptr<DBRouter> GDBRouter;
 
-// 흐름 (같은 계정 기준, 전부 이 줄에서 순서대로)
+// 흐름 (같은 계정 기준, 전부 그 계정의 줄 하나에서 순서대로)
+//   줄 고르기 DBRouter::Request* -> accountId % 줄 수 -> 그 줄의 Request* (주기 저장은 계정별로 나눠서 줄마다)
 //   입장   LoadCharacter  -> SELECT (고른 캐릭터 + 내 계정) -> SetPlayer -> _online에 추가 -> Room::Enter
 //   나감   Room::Leave    -> LeaveCharacter  -> UPDATE -> _online에서 뺌 -> (_waiting에 있으면) LoadCharacter
 //   중복   LoadCharacter  -> _online에 있음  -> 옛 세션 Disconnect, 새 세션은 _waiting -> 옛 세션의 LeaveCharacter가 이어 줌
@@ -63,7 +64,49 @@ void DBQueue::RequestSave(xvector<CharacterData> rows)
 	DoAsync(&DBQueue::SaveCharacters, std::move(rows), NowUs());	// 받은 벡터를 복사하지 않고 Job으로 넘김
 }
 
-// 10초 동안 일감이 하나라도 있었을 때만 한 줄 (부하 테스트 Test/Load/Run-Load.ps1이 읽을 예정)
+void DBRouter::Init(int32 queueCount)
+{
+	for (int32 i = 0; i < queueCount; i++)
+	{
+		shared_ptr<DBQueue> queue = MakeShared<DBQueue>(i);	// i가 forward로 DBQueue(int32 index) 생성자까지 전달됨
+		queue->StartStats();								// shared_from_this를 쓰므로 MakeShared 다음에
+		_queues.push_back(queue);
+	}
+}
+
+// accountId는 DB의 자동 증가 번호라 양수. uint64로 바꿔서 나머지 -> 결과가 항상 0 ~ 줄 수 - 1
+//   (C++에서 음수 % 4는 음수라 배열 범위를 벗어날 수 있음)
+size_t DBRouter::QueueIndex(int64 accountId) const
+{
+	return static_cast<uint64>(accountId) % _queues.size();
+}
+
+void DBRouter::RequestLoad(GameSessionRef session, int64 accountId, int64 characterId)
+{
+	_queues[QueueIndex(accountId)]->RequestLoad(session, accountId, characterId);
+}
+
+void DBRouter::RequestLeave(CharacterData data)
+{
+	const size_t index = QueueIndex(data.accountId);	// move 전에 계산 (move 뒤에는 data를 읽지 않음)
+	_queues[index]->RequestLeave(std::move(data));
+}
+
+// Room 줄이 "주기 저장 -> Leave" 순서로 부르고, 같은 계정은 같은 줄에 그 순서대로 들어감 -> 옛 값이 나중 값을 덮어쓰지 않음
+void DBRouter::RequestSave(xvector<CharacterData> rows)
+{
+	xvector<xvector<CharacterData>> parts(_queues.size());	// 줄마다 빈 목록 하나씩
+	for (CharacterData& row : rows)
+		parts[QueueIndex(row.accountId)].push_back(std::move(row));
+
+	for (size_t i = 0; i < parts.size(); i++)
+	{
+		if (parts[i].empty() == false)
+			_queues[i]->RequestSave(std::move(parts[i]));
+	}
+}
+
+// 10초 동안 일감이 하나라도 있었을 때만 한 줄 (부하 테스트 Test/Load/Run-Load.ps1이 읽음). 줄마다 따로 찍힘
 //   wait: 요청 ~ 이 줄에서 시작 (앞 일감을 기다린 시간), run: 그 일감 자체 (DB 쿼리 포함)
 void DBQueue::LogStats()
 {
@@ -82,7 +125,8 @@ void DBQueue::LogStats()
 			<< ", run avg " << avgMs(v.runSumUs, v.count) << "ms max " << (v.runMaxUs / 1000.0) << "ms)"
 			<< ", save " << s.count << " (" << _savedRows << " rows"
 			<< ", wait avg " << avgMs(s.waitSumUs, s.count) << "ms max " << (s.waitMaxUs / 1000.0) << "ms"
-			<< ", run avg " << avgMs(s.runSumUs, s.count) << "ms max " << (s.runMaxUs / 1000.0) << "ms)";
+			<< ", run avg " << avgMs(s.runSumUs, s.count) << "ms max " << (s.runMaxUs / 1000.0) << "ms)"
+			<< ", queue " << _index;	// 맨 끝에 붙임 -> 앞부분 모양이 그대로라 Run-Load.ps1이 그대로 읽음
 	}
 
 	_loadStats = JobStats{};

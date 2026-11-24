@@ -242,7 +242,7 @@ void ApplyLoadBossOption(int argc, char* argv[])
 
 // 시작 순서 (메인 스레드)
 //   설정(config.ini) -> 토큰 검증기([Auth]) -> DB 접속 + 확인 쿼리 -> 기획 데이터 로드(LoadGameData)
-//   -> DB 큐 생성 -> Room 생성, 몬스터 스폰, 첫 틱 예약 -> 서버 열기(listen) -> 워커 스레드
+//   -> DB 줄 생성(연결 수만큼) -> Room 생성, 몬스터 스폰, 첫 틱 예약 -> 서버 열기(listen) -> 워커 스레드
 //   DB와 기획 데이터를 워커보다 먼저 준비하므로, 이후 여러 스레드가 락 없이 읽기만 함
 int main(int argc, char* argv[])
 {
@@ -267,8 +267,8 @@ int main(int argc, char* argv[])
 		return -1;
 
 	ClientPacketHandler::Init();
-	GDBQueue = MakeShared<DBQueue>();	// 캐릭터 불러오기 / 저장 (게임 중 DB 일은 전부 이 줄로)
-	GDBQueue->StartStats();				// 10초마다 [DB] 통계 (shared_from_this를 쓰므로 MakeShared 다음에)
+	GDBRouter = MakeShared<DBRouter>();		// 캐릭터 불러오기 / 저장 (게임 중 DB 일은 전부 이 입구로)
+	GDBRouter->Init(DB_CONNECTION_COUNT);	// DB 줄 수 = 연결 수 (줄마다 10초 [DB] 통계)
 	GRoom = MakeShared<Room>();
 	GRoom->SetMonsterSendPolicy(monsterSendPolicy);
 	GRoom->SetSaveInterval(ParseSaveIntervalSec(argc, argv));

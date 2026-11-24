@@ -5,12 +5,13 @@ class DBConnection;
 struct CharacterData;
 struct ItemSlot;
 
-// DB 전용 줄. 게임 중에 DB를 부르는 일은 전부 여기로 DoAsync
+// DB 전용 줄 하나. 줄은 DB 연결 수만큼 있고, 바깥에서는 DBRouter(아래)를 통해서만 부름
 //   Room 줄은 DB를 기다리지 않음 (DB가 느려도 틱이 안 멈춤)
-//   한 줄이라 한 번에 하나씩, 들어온 순서대로 실행 -> 같은 계정의 불러오기 / 저장 순서가 섞이지 않음
-//   DB 일은 워커 스레드 하나를 잠깐 막지만, Room 줄은 다른 워커가 계속 돌림
+//   계정 번호로 줄이 정해짐 -> 같은 계정은 항상 같은 줄에서 한 번에 하나씩, 들어온 순서대로 -> 불러오기 / 저장 순서가 섞이지 않음
+//   다른 계정은 다른 줄에서 동시에 돌 수 있음 (연결 4개를 같이 씀)
+//   DB 일은 그 일을 실행하는 워커 스레드를 잠깐 막음 -> 줄 4개가 다 바쁘면 워커 4개가 막힘 (나머지가 Room 줄을 돌림)
 //
-// 접속 중인 계정 목록(_online)도 이 줄이 들고 있음 -> 같은 계정은 "마지막 저장 -> 다음 불러오기" 순서가 항상 지켜짐
+// 접속 중인 계정 목록(_online)도 줄마다 자기 계정 몫만 들고 있음 -> 같은 계정은 "마지막 저장 -> 다음 불러오기" 순서가 항상 지켜짐
 //   중복 로그인: 옛 세션을 끊고 새 세션은 _waiting에 둠 -> 옛 세션의 LeaveCharacter(저장)가 끝나면 이어서 불러옴
 class DBQueue : public JobQueue
 {
@@ -31,10 +32,13 @@ class DBQueue : public JobQueue
 	struct ScopedJob;	// 일감 하나의 대기 / 실행 시간을 재는 RAII (DBQueue.cpp에 정의)
 
 public:
-	void	StartStats();	// main에서 한 번: 10초마다 LogStats 예약
+	// explicit: 숫자 하나가 몰래 DBQueue로 바뀌는 일을 막음 (DBQueue q = 3; 같은 코드가 컴파일되지 않게)
+	explicit DBQueue(int32 index) : _index(index) {}
 
-	// 요청 입구 (IOCP 스레드, Room 줄에서 부름): 지금 시각을 붙여서 이 줄에 넣음 -> 줄에서 기다린 시간을 잴 수 있음
-	//   바깥에서는 이 세 개만 부름 (실제 일 함수는 private). DB 일의 입구가 여기 하나라, 줄을 나눌 때도 이 안만 바꾸면 됨
+	void	StartStats();	// DBRouter::Init에서 한 번: 10초마다 LogStats 예약
+
+	// 요청 입구 (DBRouter가 고른 줄에서 부름): 지금 시각을 붙여서 이 줄에 넣음 -> 줄에서 기다린 시간을 잴 수 있음
+	//   실제 일 함수는 private. 바깥(핸들러, Room)은 DBRouter만 부름
 	void	RequestLoad(GameSessionRef session, int64 accountId, int64 characterId);
 	void	RequestLeave(CharacterData data);
 	void	RequestSave(xvector<CharacterData> rows);
@@ -78,6 +82,8 @@ private:
 	xunordered_map<int64, weak_ptr<GameSession>>	_online;	// 입장한 계정 -> 그 세션 (SetPlayer 성공 ~ LeaveCharacter)
 	xunordered_map<int64, WaitingLogin>				_waiting;	// 계정 -> 옛 세션의 저장을 기다리는 새 로그인
 
+	int32		_index = 0;		// 몇 번 줄인지 ([DB] 통계 줄 끝의 "queue N")
+
 	// 10초 통계 (LogStats가 찍고 0으로)
 	JobStats	_loadStats;
 	JobStats	_leaveStats;
@@ -85,4 +91,21 @@ private:
 	uint64		_savedRows = 0;	// 주기 저장으로 쓴 캐릭터 수
 };
 
-extern shared_ptr<DBQueue> GDBQueue;
+// DB 일의 입구: 계정 번호로 줄을 골라서 넘기기만 함 (같은 계정 = 항상 같은 줄 -> 그 계정의 순서는 그대로)
+//   줄 수는 DB 연결 수와 같게: 한 줄은 한 번에 연결 하나만 빌리므로, 줄이 더 많으면 Pop이 빈 연결을 기다리며 워커를 막음
+//   JobQueue가 아님: Init 뒤로는 _queues를 읽기만 함 -> 여러 스레드가 동시에 불러도 락이 필요 없음 (기획 데이터와 같은 이유)
+class DBRouter
+{
+public:
+	void	Init(int32 queueCount);		// main에서 한 번 (워커가 뜨기 전): 줄 N개 생성 + 각 줄 StartStats
+	void	RequestLoad(GameSessionRef session, int64 accountId, int64 characterId);
+	void	RequestLeave(CharacterData data);
+	void	RequestSave(xvector<CharacterData> rows);	// 계정별로 나눠서 줄마다 하나씩 (줄 안에서는 다시 50명씩 묶음)
+
+private:
+	size_t	QueueIndex(int64 accountId) const;
+
+	xvector<shared_ptr<DBQueue>>	_queues;
+};
+
+extern shared_ptr<DBRouter> GDBRouter;
