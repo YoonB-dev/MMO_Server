@@ -25,7 +25,7 @@
 //   60초마다  SaveAllPlayers (전원 값을 복사해서 DB 줄로. 틱은 DB를 기다리지 않음)
 //
 // 입장 / 퇴장
-//   DB 줄(LoadCharacter)이 캐릭터를 불러온 뒤 Enter -> S_ENTER_GAME, 시야 안의 객체를 S_SPAWN (나에게 주변, 상한이 남은 주변에게 나)
+//   DB 줄(LoadCharacter)이 캐릭터를 불러온 뒤 Enter (다음 틱이 가까우면 대기 목록 -> 틱 끝에 남는 시간만큼) -> S_ENTER_GAME, 시야 안의 객체를 S_SPAWN (나에게 주변, 상한이 남은 주변에게 나)
 //   끊기면 Leave -> 나를 보던 사람에게 S_DESPAWN + 값을 복사해서 DB 줄(LeaveCharacter)에 저장 요청
 //
 // 시야 (AOI)
@@ -189,6 +189,9 @@ void Room::Tick()
 	if (workUs > _workTimeMaxUs)
 		_workTimeMaxUs = workUs;
 
+	// 입장 대기 목록: work(틱 일)와 섞이지 않게 기록 다음에. 다음 틱 예약(now) 전에 해야 예약 시각이 이만큼 밀리지 않음
+	DrainPendingEnters();
+
 	const uint64 now = ::GetTickCount64();
 
 	if (_tick % TICK_LOG_INTERVAL == 0)
@@ -230,7 +233,8 @@ void Room::LogStats(uint64 now)
 			<< ", room wait avg " << avgMs(e.roomWait) << " max " << maxMs(e.roomWait)
 			<< ", run avg " << avgMs(e.run) << " max " << maxMs(e.run)
 			<< ", send wait avg " << avgMs(e.sendWait) << " max " << maxMs(e.sendWait)
-			<< ", total avg " << avgMs(e.total) << " max " << maxMs(e.total) << ") ms";
+			<< ", total avg " << avgMs(e.total) << " max " << maxMs(e.total) << ") ms"
+			<< ", deferred " << _enterDeferred << ", queue max " << _enterQueueMax;	// 맨 끝 -> Run-Load.ps1 정규식은 그대로
 	}
 
 	// 시야: 한 명이 지금 보고 있는 객체 수 (AOI 효과를 숫자로 보려고. 지금 순간의 값)
@@ -268,6 +272,8 @@ void Room::LogStats(uint64 now)
 
 	_logStartTime = now;
 	_enterStats = EnterStats{};
+	_enterDeferred = 0;
+	_enterQueueMax = 0;
 	_intervalMaxUs = 0;
 	_workTimeSumUs = 0;
 	_workTimeMaxUs = 0;
@@ -555,7 +561,38 @@ void Room::UpdateView(const PlayerRef& player, const Protocol::S_MOVE& tickMoves
 		SendMoves(player, movePkt);
 }
 
+// DB 줄 -> Room 줄 입구. 다음 틱까지 여유가 있고 기다리는 사람이 없으면 바로 (한가할 때는 예전과 같음)
+//   여유가 없으면(다음 틱이 5ms 안) 대기 목록 뒤에 섬 -> 틱 끝 DrainPendingEnters가 남는 시간만큼 처리
+//   기다리는 사람이 있으면 여유가 있어도 뒤에 섬 -> 들어온 순서 유지
+//   대기 중인 사람은 아직 _players에 없음 -> Handle* 핸들러가 전부 _players를 먼저 봐서 그 사람의 요청은 무시됨
 void Room::Enter(PlayerRef player)
+{
+	if (_pendingEnters.empty() && NowUs() < _lastTickStartUs + ENTER_DEADLINE_US)
+	{
+		ProcessEnter(player);
+		return;
+	}
+
+	_pendingEnters.push_back(std::move(player));
+	_enterDeferred++;
+	_enterQueueMax = (std::max)(_enterQueueMax, static_cast<uint64>(_pendingEnters.size()));
+}
+
+// Tick 끝 (work 기록 다음, 다음 틱 예약 전): 다음 틱 5ms 전까지 앞에서부터 입장
+//   done == 0 조건: 틱 일만으로 예산을 넘긴 틱에도 최소 1명은 진행 (입장이 멈추지 않게)
+void Room::DrainPendingEnters()
+{
+	int32 done = 0;
+	while (_pendingEnters.empty() == false && (done == 0 || NowUs() < _lastTickStartUs + ENTER_DEADLINE_US))
+	{
+		PlayerRef player = std::move(_pendingEnters.front());	// 복사 대신 꺼내 옴 (참조 카운트를 올렸다 내리지 않음)
+		_pendingEnters.pop_front();
+		ProcessEnter(player);
+		done++;
+	}
+}
+
+void Room::ProcessEnter(PlayerRef player)
 {
 	// DB 큐가 SetPlayer한 뒤 바로 끊기면, Leave가 이 Enter보다 먼저 줄에 들어갈 수 있음
 	//   그 경우 세션은 이미 연결 끊김 표시라 여기서 막음 (안 막으면 아무도 내보내지 않는 유령 플레이어가 남음)

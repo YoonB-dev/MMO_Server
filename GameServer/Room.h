@@ -106,7 +106,7 @@ public:
 	void	SetMaxDrops(int32 count);					// 바닥 드랍 상한 (Start 전에 main에서 한 번, 0 이하면 기본 500 그대로)
 	void	SetMaxVisiblePlayers(int32 count);			// 보이는 다른 플레이어 상한 (Start 전에 main에서 한 번, 0 이하면 기본 50 그대로)
 	void	Start();				// 첫 틱 예약 (main에서 한 번)
-	void	Enter(PlayerRef player);
+	void	Enter(PlayerRef player);	// DB 줄이 부르는 입구: 다음 틱까지 여유가 있으면 바로, 아니면 입장 대기 목록에
 	void	Leave(PlayerRef player);	// 방에서 빼기 + 저장 요청 (저장할 값을 꺼내야 해서 id가 아니라 Player)
 	void	HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 buttons, uint32 seq);
 	void	HandleSkill(PlayerRef player, int32 skillId, uint64 targetId);
@@ -157,6 +157,8 @@ private:
 	static void	CountTargetFail(TargetFailStats& stats, TargetCheck result);
 	void	UpdateViews(const Protocol::S_MOVE& tickMoves);						// 매 틱 끝: 플레이어마다 UpdateView
 	void	UpdateView(const PlayerRef& player, const Protocol::S_MOVE& tickMoves);	// 시야 다시 계산 -> S_DESPAWN, S_SPAWN, S_MOVE를 이 사람에게
+	void	ProcessEnter(PlayerRef player);									// 실제 입장: S_ENTER_GAME + EnterView + 바로 송신 + 입장 구간 기록
+	void	DrainPendingEnters();											// 틱 끝: 입장 대기 목록을 다음 틱 전(ENTER_DEADLINE_US)까지 처리
 	void	EnterView(const PlayerRef& player);								// 입장 즉시: 주변을 나에게, 나를 주변에게 (그 사람의 상한이 남았을 때)
 	int32	CountVisiblePlayers(Player& viewer);							// 지금 보고 있는 다른 플레이어 수 (입장 때만)
 	void	SelectVisiblePlayers(Player& viewer, float x, float z);			// 보일 다른 플레이어를 _viewCandidates에 (상한이면 우선순위 순으로 자름)
@@ -216,8 +218,16 @@ private:
 		Span	total;
 	};
 
+	// 입장은 틱 시작부터 이 시각까지만 (다음 틱 5ms 전). 400명이 몰려도 Enter들이 다음 틱을 밀지 않게
+	//   (입장 구간 측정: Enter 400개가 Room 줄을 약 350ms 잡아 틱이 250ms 밀렸음)
+	//   45'000: '는 숫자 구분자 (C++14, 값은 45000)
+	static constexpr int64	ENTER_DEADLINE_US = 45'000;
+	xdeque<PlayerRef>	_pendingEnters;		// 입장 대기 (들어온 순서. 뒤에 넣고 앞에서 빼서 deque)
+
 	// 10초(200틱) 통계 -> LogStats에서 출력 후 0으로
-	EnterStats	_enterStats;			// Room::Enter가 다섯 조각 모두 기록 (입장 응답을 바로 보내서 sendWait는 0)
+	EnterStats	_enterStats;			// ProcessEnter가 다섯 조각 모두 기록 (입장 응답을 바로 보내서 sendWait는 0, roomWait에 대기 목록 시간 포함)
+	uint64	_enterDeferred = 0;		// 대기 목록으로 간 입장 수
+	uint64	_enterQueueMax = 0;		// 대기 목록이 가장 길었을 때
 	int64	_lastTickStartUs = 0;	// 지난 틱 시작 시각 (NowUs) -> 틱 사이 간격 (0이면 첫 틱)
 	uint64	_intervalMaxUs = 0;		// 가장 길었던 틱 간격 (평균에 묻히는 한 번의 큰 밀림을 보려고)
 	uint64	_workTimeSumUs = 0;		// 틱 처리 시간 합 (마이크로초)
