@@ -245,7 +245,7 @@ void Room::LogStats(uint64 now)
 			<< ", objects avg " << avgMs(e.objects) << " max " << maxMs(e.objects)
 			<< ", spawn send avg " << avgMs(e.spawnSend) << " max " << maxMs(e.spawnSend)
 			<< ", flush avg " << avgMs(e.flush) << " max " << maxMs(e.flush) << ") ms"
-			<< ", notify " << (e.notifyOthers / perEnter) << " others / " << (e.notifyScanned / perEnter) << " entries per enter";
+			<< ", notify " << (e.notifyOthers / perEnter) << " others per enter";
 	}
 
 	// 시야: 한 명이 지금 보고 있는 객체 수 (AOI 효과를 숫자로 보려고. 지금 순간의 값)
@@ -339,7 +339,6 @@ void Room::BroadcastToViewers(GameObject& object, SendBufferRef sendBuffer)
 //     바로 넣는 이유: 다음 틱까지 기다리면 입장 직후 50ms 동안 내 채팅 / 스킬 같은 이벤트가 주변에 안 감
 void Room::EnterView(const PlayerRef& player)
 {
-	const uint64 myId = player->GetObjectId();
 	const float x = player->GetPosInfo()->x();
 	const float z = player->GetPosInfo()->z();
 	const float enterSq = VIEW_ENTER_RADIUS * VIEW_ENTER_RADIUS;
@@ -352,7 +351,7 @@ void Room::EnterView(const PlayerRef& player)
 	SelectVisiblePlayers(*player, x, z);	// 입장 직후라 전부 "새로 보임" -> 들어오는 반경 안에서 가까운 순으로 상한까지
 	for (const ViewCandidate& c : _viewCandidates)
 	{
-		player->visible.emplace(c.player->GetObjectId(), ViewEntry{ _tick, _tick });
+		player->AddVisible(*c.player, _tick);
 		*aroundPkt.add_objects() = c.player->GetObjectInfo();
 	}
 	const int64 t1 = NowUs();
@@ -363,8 +362,8 @@ void Room::EnterView(const PlayerRef& player)
 				return;
 			// 반경 안인 사람만 셈 (조건 순서는 예전 한 줄짜리 ||와 같음 -> 계산하는 일은 그대로)
 			_enterStats.notifyOthers++;
-			_enterStats.notifyScanned += other->visible.size();	// 아래 CountVisiblePlayers가 훑을 칸 수
-			if (CountVisiblePlayers(*other) >= _maxVisiblePlayers)
+			other->CheckVisiblePlayerCount();	// Debug만: 숫자가 맞는지 다시 셈 (Release는 아무것도 안 함)
+			if (other->VisiblePlayerCount() >= _maxVisiblePlayers)	// 숫자 하나 읽기 (예전: 그 사람의 시야 목록 전체를 훑어서 셈)
 				return;
 
 			if (mePkt == nullptr)
@@ -373,7 +372,7 @@ void Room::EnterView(const PlayerRef& player)
 				*pkt.add_objects() = player->GetObjectInfo();
 				mePkt = ClientPacketHandler::MakeSendBuffer(pkt);
 			}
-			other->visible.emplace(myId, ViewEntry{ _tick, _tick });
+			other->AddVisible(*player, _tick);
 			SendTo(other, mePkt);
 		});
 	const int64 t2 = NowUs();
@@ -383,7 +382,7 @@ void Room::EnterView(const PlayerRef& player)
 			if (DistSq(*monster, x, z) > enterSq)
 				return;
 
-			player->visible.emplace(monster->GetObjectId(), ViewEntry{ _tick, _tick });
+			player->AddVisible(*monster, _tick);
 			*aroundPkt.add_objects() = monster->GetObjectInfo();
 		});
 
@@ -392,7 +391,7 @@ void Room::EnterView(const PlayerRef& player)
 			if (DistSq(*drop, x, z) > enterSq)
 				return;
 
-			player->visible.emplace(drop->GetObjectId(), ViewEntry{ _tick, _tick });
+			player->AddVisible(*drop, _tick);
 			*aroundPkt.add_objects() = drop->GetObjectInfo();
 		});
 	const int64 t3 = NowUs();
@@ -449,19 +448,6 @@ void Room::SelectVisiblePlayers(Player& viewer, float x, float z)
 	_viewCandidates.resize(_maxVisiblePlayers);	// 뒤쪽(우선순위 낮은 사람)은 이번 틱에 확인 안 됨 -> 이미 보이던 사람이면 S_DESPAWN
 }
 
-// 이 사람이 지금 보고 있는 다른 플레이어 수 (visible에는 몬스터, 드랍도 섞여 있어서 _players에 있는 id만 셈)
-//   입장(EnterView)에서만 씀 -> 드물어서 매번 세어도 비용이 작음 (따로 개수를 들고 다니면 넣고 빼는 곳마다 맞춰야 함)
-int32 Room::CountVisiblePlayers(Player& viewer)
-{
-	int32 count = 0;
-	for (auto& [id, entry] : viewer.visible)
-	{
-		if (_players.count(id) > 0)
-			count++;
-	}
-	return count;
-}
-
 // 다른 플레이어를 보여 줄 우선순위 점수 (작을수록 먼저). 상한이 꽉 차면 점수가 작은 사람이 큰 사람 자리를 뺏음
 //   ① 작은 시야 안:                거리 - 끈적임(보이던 사람) / 거리(새 사람)
 //   ② 작은 시야 밖, 보이던 사람:   VIEW_TIER_STEP + 거리      -> 밖에서 새로 온 사람에게는 안 밀림 (①이 밀어낼 때는 먼 사람부터)
@@ -500,7 +486,7 @@ void Room::ShowInView(Player& viewer, GameObject& other, float distSq, Protocol:
 	auto it = viewer.visible.find(other.GetObjectId());
 	if (it == viewer.visible.end())
 	{
-		viewer.visible.emplace(other.GetObjectId(), ViewEntry{ _tick, _tick });
+		viewer.AddVisible(other, _tick);
 		*spawnPkt.add_objects() = other.GetObjectInfo();
 		return;
 	}
@@ -569,7 +555,7 @@ void Room::UpdateView(const PlayerRef& player, const Protocol::S_MOVE& tickMoves
 		if (it->second.seenTick != _tick)
 		{
 			despawnPkt.add_object_ids(it->first);
-			it = player->visible.erase(it);
+			it = player->EraseVisible(it);
 		}
 		else
 		{
@@ -690,7 +676,7 @@ void Room::Leave(PlayerRef player)
 			{
 				if (viewer == player)
 					return;		// 나가는 본인은 제외
-				viewer->visible.erase(id);
+				viewer->EraseVisible(id);
 				SendTo(viewer, sendBuffer);
 			});
 
@@ -1240,7 +1226,7 @@ void Room::KillMonster(MonsterRef monster, uint64 killerId)
 	SendBufferRef sendBuffer = ClientPacketHandler::MakeSendBuffer(pkt);
 	ForEachViewer(*monster, [&](const PlayerRef& viewer)
 		{
-			viewer->visible.erase(monsterId);
+			viewer->EraseVisible(monsterId);
 			SendTo(viewer, sendBuffer);
 		});
 
@@ -1360,7 +1346,7 @@ void Room::RemoveDrop(DropRef drop, uint64 pickerId)
 	}
 	ForEachViewer(*drop, [&](const PlayerRef& viewer)
 		{
-			viewer->visible.erase(id);
+			viewer->EraseVisible(id);
 			SendTo(viewer, sendBuffer);
 		});
 	_grid.Remove(drop);	// ForEachViewer가 끝난 뒤에 (도는 중에 칸 목록을 바꾸면 안 됨)

@@ -13,6 +13,7 @@ public:
 	Protocol::MoveInfo*		GetMoveInfo() { return _objectInfo.mutable_move_info(); }
 	Protocol::PosInfo*		GetPosInfo() { return GetMoveInfo()->mutable_pos_info(); }
 	Protocol::StatInfo*		GetStatInfo() { return _objectInfo.mutable_stat_info(); }
+	bool					IsPlayer() const { return _objectInfo.object_type() == Protocol::OBJECT_TYPE_PLAYER; }	// 시야 목록의 플레이어 수 세기용
 
 public:
 	// --- AOI (Room JobQueue 안에서만 접근 -> 락 없음) ---

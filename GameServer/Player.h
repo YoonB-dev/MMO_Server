@@ -16,6 +16,7 @@ struct ViewEntry
 {
 	uint64	seenTick = 0;	// 마지막으로 "시야 안"이라고 확인한 틱 (매 틱 UpdateView가 지금 틱으로 바꿈. 아니면 S_DESPAWN)
 	uint64	sentTick = 0;	// 이 플레이어에게 그 객체의 이동(또는 S_SPAWN)을 마지막으로 보낸 틱 -> 거리별 갱신 빈도
+	bool	isPlayer = false;	// 플레이어 칸인지 (지울 때 보이는 플레이어 수를 줄일지 알려고. id만으로는 종류를 모름)
 };
 
 // 인벤토리 한 칸 (DB player_inventory 한 줄). itemId 0 = 빈 칸
@@ -278,7 +279,44 @@ public:
 	//   지금 이 클라에 보이는 객체 id -> ViewEntry (언제 확인했나 / 그 객체의 이동을 언제 보냈나)
 	//   매 틱 Room::UpdateView가 확인한 것만 seenTick을 지금 틱으로 바꾸고, 아닌 것(= 이번에 확인 안 됨)은 S_DESPAWN 후 지움
 	//   나 자신은 넣지 않음 (내 이동은 항상 받음). 다른 플레이어는 상한(우선순위 순)까지만 들어감
-	xunordered_map<uint64, ViewEntry>	visible;
+	//   넣고 빼기는 아래 AddVisible / EraseVisible로만 (읽기, seenTick / sentTick 고치기는 visible을 바로 봐도 됨)
+	//   -> _visiblePlayerCount가 항상 "visible 안의 플레이어 칸 수"와 같음 (불변식)
+	//   (예전 Room::CountVisiblePlayers는 셀 때마다 목록 전체를 훑음: 800명 입장 한 번에 약 5,000칸, Enter 비용의 86%)
+	using VisibleMap = xunordered_map<uint64, ViewEntry>;
+	VisibleMap	visible;
+
+	void AddVisible(GameObject& object, uint64 tick)
+	{
+		const bool isPlayer = object.IsPlayer();
+		// emplace는 pair<반복자, 새로 넣었나>를 돌려줌. 이미 있는 키면 아무것도 안 함 (예전과 같음) -> 그때는 세지 않음
+		auto [it, inserted] = visible.emplace(object.GetObjectId(), ViewEntry{ tick, tick, isPlayer });
+		if (inserted && isPlayer)
+			_visiblePlayerCount++;
+	}
+	void EraseVisible(uint64 id)
+	{
+		auto it = visible.find(id);
+		if (it != visible.end())
+			EraseVisible(it);
+	}
+	// 돌면서 지우는 곳(Room::UpdateView)용: 지운 다음 칸을 돌려줌 (지운 반복자는 못 씀)
+	VisibleMap::iterator EraseVisible(VisibleMap::iterator it)
+	{
+		if (it->second.isPlayer)
+			_visiblePlayerCount--;
+		return visible.erase(it);
+	}
+	int32 VisiblePlayerCount() const { return _visiblePlayerCount; }
+	// Debug에서만: 다시 세서 숫자가 맞는지 (넣고 빼는 곳을 하나라도 빠뜨리면 테스트에서 바로 멈춤). Release는 빈 함수
+	void CheckVisiblePlayerCount() const
+	{
+#ifdef _DEBUG
+		int32 count = 0;
+		for (auto& [id, entry] : visible)
+			count += entry.isPlayer ? 1 : 0;
+		ASSERT_CRASH(count == _visiblePlayerCount);
+#endif
+	}
 
 	// --- 채팅 (Room의 JobQueue 안에서만 접근 -> 락 없음) ---
 	uint64	chatReadyTick = 0;	// 이 틱부터 다시 채팅 가능 (도배 방지). 0 = 바로 가능
@@ -287,4 +325,5 @@ private:
 	weak_ptr<GameSession>	_session;	// 세션이 Player를 shared_ptr로 들고 있으므로 이쪽은 weak (순환 참조 방지)
 	int64					_characterId = 0;	// player_character의 character_id (저장할 때 어느 줄인지)
 	int64					_accountId = 0;		// 토큰의 sub (같은 계정 동시 접속 관리용)
+	int32					_visiblePlayerCount = 0;	// visible 안의 플레이어 칸 수 (AddVisible / EraseVisible만 바꿈)
 };
