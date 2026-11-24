@@ -595,10 +595,20 @@ void Room::Enter(PlayerRef player)
 	// 2. 시야: 주변을 나에게, 나를 주변에게 (방 전체가 아니라 들어오는 반경 안만)
 	EnterView(player);
 
-	// 입장 구간 기록. S_ENTER_GAME은 아직 쌓이기만 함 -> 실제 송신은 틱 끝 FlushSends (거기서 송신 대기를 잼)
-	session->enterDoneUs = NowUs();
+	// 3. 입장 응답은 틱 끝을 기다리지 않고 바로 보냄 (내 큐에 쌓인 S_ENTER_GAME + 주변 S_SPAWN을 WSASend 한 번)
+	//   틱 끝 몰아 보내기는 매 틱 생기는 이동 패킷용. 입장은 사람마다 한 번이라 기다린 만큼 입장 지연만 늘어남
+	//   (기준선: 빈 서버 85ms 중 47ms, 몰렸을 때 303ms 중 122ms가 이 대기)
+	//   주변 사람에게 가는 "나"의 S_SPAWN은 그대로 틱 끝에 감 (그 사람들의 이동 패킷과 같이 한 번에)
+	//   틱 끝 FlushSends가 이 세션을 한 번 더 불러도 괜찮음: 큐가 비었거나 보내는 중이면 FlushSend가 아무것도 안 함
+	const int64 doneUs = NowUs();
+	session->FlushSend();
+
+	// 입장 구간 기록 (송신 대기는 이제 0. 같은 줄 모양을 유지해서 기준선과 바로 비교)
+	_enterStats.db.Add(session->enterLoadedUs - session->enterRecvUs);
 	_enterStats.roomWait.Add(startUs - session->enterLoadedUs);
-	_enterStats.run.Add(session->enterDoneUs - startUs);
+	_enterStats.run.Add(doneUs - startUs);
+	_enterStats.sendWait.Add(0);
+	_enterStats.total.Add(doneUs - session->enterRecvUs);
 }
 
 void Room::Leave(PlayerRef player)
@@ -1574,7 +1584,7 @@ void Room::SendSpawns(const PlayerRef& player, const Protocol::S_SPAWN& all)
 // 방에서 나가는 패킷은 전부 여기를 지남 -> 송신량 통계도 여기서 셈
 //   Room 잡큐 안에서만 불리므로(한 번에 한 스레드) 카운터는 atomic이 아니어도 됨
 //   큐에 넣기만 하고(PushSend) 실제 WSASend는 틱 끝 FlushSends에서 세션마다 한 번
-//     -> 한 틱에 같은 사람에게 패킷이 여러 개 가도 시스템 호출은 한 번 (틱 밖에서 생긴 패킷은 최대 한 틱 늦게 감)
+//     -> 한 틱에 같은 사람에게 패킷이 여러 개 가도 시스템 호출은 한 번 (틱 밖에서 생긴 패킷은 최대 한 틱 늦게 감. 입장 응답은 예외: Room::Enter가 바로 FlushSend)
 void Room::SendTo(PlayerRef player, SendBufferRef sendBuffer)
 {
 	if (GameSessionRef session = player->GetSession())
@@ -1597,15 +1607,6 @@ void Room::FlushSends()
 {
 	for (GameSessionRef& session : _pendingFlush)
 	{
-		// 이번 틱에 입장한 세션만 (평소에는 비교 한 번): S_ENTER_GAME이 지금 실제로 나감 -> 입장 구간 끝
-		if (session->enterDoneUs != 0)
-		{
-			const int64 nowUs = NowUs();
-			_enterStats.db.Add(session->enterLoadedUs - session->enterRecvUs);
-			_enterStats.sendWait.Add(nowUs - session->enterDoneUs);
-			_enterStats.total.Add(nowUs - session->enterRecvUs);
-			session->enterDoneUs = 0;
-		}
 		session->flushPending = false;
 		session->FlushSend();
 	}
