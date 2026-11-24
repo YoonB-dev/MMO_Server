@@ -160,7 +160,6 @@ private:
 	void	ProcessEnter(PlayerRef player);									// 실제 입장: S_ENTER_GAME + EnterView + 바로 송신 + 입장 구간 기록
 	void	DrainPendingEnters();											// 틱 끝: 입장 대기 목록을 다음 틱 전(ENTER_DEADLINE_US)까지 처리
 	void	EnterView(const PlayerRef& player);								// 입장 즉시: 주변을 나에게, 나를 주변에게 (그 사람의 상한이 남았을 때)
-	int32	CountVisiblePlayers(Player& viewer);							// 지금 보고 있는 다른 플레이어 수 (입장 때만)
 	void	SelectVisiblePlayers(Player& viewer, float x, float z);			// 보일 다른 플레이어를 _viewCandidates에 (상한이면 우선순위 순으로 자름)
 	float	ViewPriority(Player& viewer, Player& other, float distSq, bool wasVisible);	// 작을수록 먼저 보임 (확장: 파티원, 공격 대상 등)
 	uint64	MoveIntervalFor(GameObject& object, float distSq);				// 거리별 이동 전송 간격 (틱). 확장: 객체 종류별 (보스는 매 틱 등)
@@ -219,12 +218,11 @@ private:
 		// Enter 안 (run을 쪼갬) + 바로 송신: ProcessEnter / EnterView에서. [Room] enter cost 줄
 		Span	enterPkt;		// ① _players, Grid에 넣기 + S_ENTER_GAME 만들기
 		Span	select;			// ② SelectVisiblePlayers + 고른 사람을 aroundPkt에
-		Span	notify;			// ③ 주변 플레이어에게 나 알리기 (CountVisiblePlayers 포함)
+		Span	notify;			// ③ 주변 플레이어에게 나 알리기 (보이는 플레이어 수는 Player::VisiblePlayerCount로 읽기만)
 		Span	objects;		// ④ 몬스터, 드랍
 		Span	spawnSend;		// ⑤ SendSpawns (나눠 담기 + 직렬화)
 		Span	flush;			// ⑥ FlushSend (WSASend). run에는 안 들어감
 		uint64	notifyOthers = 0;	// ③에서 확인한 주변 플레이어 수 (합)
-		uint64	notifyScanned = 0;	// ③의 CountVisiblePlayers가 훑은 시야 목록 칸 수 (합)
 	};
 
 	// 입장은 틱 시작부터 이 시각까지만 (다음 틱 5ms 전). 400명이 몰려도 Enter들이 다음 틱을 밀지 않게
