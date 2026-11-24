@@ -216,6 +216,15 @@ private:
 		Span	run;
 		Span	sendWait;
 		Span	total;
+		// Enter 안 (run을 쪼갬) + 바로 송신: ProcessEnter / EnterView에서. [Room] enter cost 줄
+		Span	enterPkt;		// ① _players, Grid에 넣기 + S_ENTER_GAME 만들기
+		Span	select;			// ② SelectVisiblePlayers + 고른 사람을 aroundPkt에
+		Span	notify;			// ③ 주변 플레이어에게 나 알리기 (CountVisiblePlayers 포함)
+		Span	objects;		// ④ 몬스터, 드랍
+		Span	spawnSend;		// ⑤ SendSpawns (나눠 담기 + 직렬화)
+		Span	flush;			// ⑥ FlushSend (WSASend). run에는 안 들어감
+		uint64	notifyOthers = 0;	// ③에서 확인한 주변 플레이어 수 (합)
+		uint64	notifyScanned = 0;	// ③의 CountVisiblePlayers가 훑은 시야 목록 칸 수 (합)
 	};
 
 	// 입장은 틱 시작부터 이 시각까지만 (다음 틱 5ms 전). 400명이 몰려도 Enter들이 다음 틱을 밀지 않게

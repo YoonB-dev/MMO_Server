@@ -235,6 +235,17 @@ void Room::LogStats(uint64 now)
 			<< ", send wait avg " << avgMs(e.sendWait) << " max " << maxMs(e.sendWait)
 			<< ", total avg " << avgMs(e.total) << " max " << maxMs(e.total) << ") ms"
 			<< ", deferred " << _enterDeferred << ", queue max " << _enterQueueMax;	// 맨 끝 -> Run-Load.ps1 정규식은 그대로
+
+		// Enter 비용 쪼개기 (run = ①~⑤, ⑥ flush는 run 밖). 따로 줄을 둬서 위 줄의 정규식에 영향 없음
+		const double perEnter = static_cast<double>(e.total.count);
+		LogLine() << "[Room] enter cost " << e.total.count
+			<< " (enter pkt avg " << avgMs(e.enterPkt) << " max " << maxMs(e.enterPkt)
+			<< ", select avg " << avgMs(e.select) << " max " << maxMs(e.select)
+			<< ", notify avg " << avgMs(e.notify) << " max " << maxMs(e.notify)
+			<< ", objects avg " << avgMs(e.objects) << " max " << maxMs(e.objects)
+			<< ", spawn send avg " << avgMs(e.spawnSend) << " max " << maxMs(e.spawnSend)
+			<< ", flush avg " << avgMs(e.flush) << " max " << maxMs(e.flush) << ") ms"
+			<< ", notify " << (e.notifyOthers / perEnter) << " others / " << (e.notifyScanned / perEnter) << " entries per enter";
 	}
 
 	// 시야: 한 명이 지금 보고 있는 객체 수 (AOI 효과를 숫자로 보려고. 지금 순간의 값)
@@ -336,16 +347,24 @@ void Room::EnterView(const PlayerRef& player)
 	Protocol::S_SPAWN aroundPkt;	// 나에게 보낼 주변 객체들
 	SendBufferRef mePkt;			// 주변에게 보낼 "나" (처음 필요할 때 한 번만 만들고 같은 버퍼를 여러 명에게)
 
+	// Enter 비용 ②~⑤: 구간 사이마다 시각 한 번 (NowUs 한 번이 수십 ns라 결과에 거의 영향 없음)
+	const int64 t0 = NowUs();
 	SelectVisiblePlayers(*player, x, z);	// 입장 직후라 전부 "새로 보임" -> 들어오는 반경 안에서 가까운 순으로 상한까지
 	for (const ViewCandidate& c : _viewCandidates)
 	{
 		player->visible.emplace(c.player->GetObjectId(), ViewEntry{ _tick, _tick });
 		*aroundPkt.add_objects() = c.player->GetObjectInfo();
 	}
+	const int64 t1 = NowUs();
 
 	_grid.ForEachPlayer(x, z, VIEW_ENTER_RADIUS, [&](const PlayerRef& other)
 		{
-			if (other == player || DistSq(*other, x, z) > enterSq || CountVisiblePlayers(*other) >= _maxVisiblePlayers)
+			if (other == player || DistSq(*other, x, z) > enterSq)
+				return;
+			// 반경 안인 사람만 셈 (조건 순서는 예전 한 줄짜리 ||와 같음 -> 계산하는 일은 그대로)
+			_enterStats.notifyOthers++;
+			_enterStats.notifyScanned += other->visible.size();	// 아래 CountVisiblePlayers가 훑을 칸 수
+			if (CountVisiblePlayers(*other) >= _maxVisiblePlayers)
 				return;
 
 			if (mePkt == nullptr)
@@ -357,6 +376,7 @@ void Room::EnterView(const PlayerRef& player)
 			other->visible.emplace(myId, ViewEntry{ _tick, _tick });
 			SendTo(other, mePkt);
 		});
+	const int64 t2 = NowUs();
 
 	_grid.ForEachMonster(x, z, VIEW_ENTER_RADIUS, [&](const MonsterRef& monster)
 		{
@@ -375,9 +395,16 @@ void Room::EnterView(const PlayerRef& player)
 			player->visible.emplace(drop->GetObjectId(), ViewEntry{ _tick, _tick });
 			*aroundPkt.add_objects() = drop->GetObjectInfo();
 		});
+	const int64 t3 = NowUs();
 
 	if (aroundPkt.objects_size() > 0)
 		SendSpawns(player, aroundPkt);
+	const int64 t4 = NowUs();
+
+	_enterStats.select.Add(t1 - t0);
+	_enterStats.notify.Add(t2 - t1);
+	_enterStats.objects.Add(t3 - t2);
+	_enterStats.spawnSend.Add(t4 - t3);
 }
 
 // 보일 다른 플레이어를 _viewCandidates에 모음
@@ -628,8 +655,9 @@ void Room::ProcessEnter(PlayerRef player)
 		}
 		SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
 	}
+	_enterStats.enterPkt.Add(NowUs() - startUs);	// Enter 비용 ①
 
-	// 2. 시야: 주변을 나에게, 나를 주변에게 (방 전체가 아니라 들어오는 반경 안만)
+	// 2. 시야: 주변을 나에게, 나를 주변에게 (방 전체가 아니라 들어오는 반경 안만). 안에서 ②~⑤를 잼
 	EnterView(player);
 
 	// 3. 입장 응답은 틱 끝을 기다리지 않고 바로 보냄 (내 큐에 쌓인 S_ENTER_GAME + 주변 S_SPAWN을 WSASend 한 번)
@@ -639,6 +667,7 @@ void Room::ProcessEnter(PlayerRef player)
 	//   틱 끝 FlushSends가 이 세션을 한 번 더 불러도 괜찮음: 큐가 비었거나 보내는 중이면 FlushSend가 아무것도 안 함
 	const int64 doneUs = NowUs();
 	session->FlushSend();
+	_enterStats.flush.Add(NowUs() - doneUs);	// Enter 비용 ⑥ (run에는 안 들어감 -> run은 기준선과 같은 범위)
 
 	// 입장 구간 기록 (송신 대기는 이제 0. 같은 줄 모양을 유지해서 기준선과 바로 비교)
 	_enterStats.db.Add(session->enterLoadedUs - session->enterRecvUs);
