@@ -144,6 +144,8 @@ private:
 	uint64	HpSyncIntervalFor(GameObject& object);							// HP바 갱신 간격 (틱). 확장: 종류별 (보스는 길게, 파티원은 매 틱 등)
 	void	Tick();
 	void	LogStats(uint64 now);
+	// 틱 하나의 조각별 시간을 10초 통계에 더하고, 이번 10초에서 가장 느린 틱이면 내역을 남김
+	void	RecordTickCost(int64 workUs, const int64 (&partUs)[7], int64 cpuUs, uint32 cpuStart, uint32 cpuEnd, uint64 viewChanges);
 	void	ResetInputCounts();
 	void	UpdatePlayerStats();					// 1초마다 스탯 갱신 (자연 회복)
 	void	SaveAllPlayers();						// 주기 저장: 전원 값을 복사해서 DB 줄로
@@ -231,7 +233,29 @@ private:
 	static constexpr int64	ENTER_DEADLINE_US = 45'000;
 	xdeque<PlayerRef>	_pendingEnters;		// 입장 대기 (들어온 순서. 뒤에 넣고 앞에서 빼서 deque)
 
+	// 틱 7조각 (10초 통계): 1초마다 일 / 주기 저장 / 이동 / 몬스터 / 시야 / HP / 송신
+	//   stats, save는 안 한 틱에도 0으로 들어감 -> 평균은 "틱당 평균", 볼 값은 최대
+	static constexpr int32	TICK_PART_COUNT = 7;
+	struct TickStats
+	{
+		Span	part[TICK_PART_COUNT];
+	};
+	// 10초 동안 가장 느린 틱 하나의 내역 (조각별 최대는 서로 다른 틱일 수 있어서 같은 틱의 값을 따로 남김)
+	//   workUs(실제로 흐른 시간)와 cpuUs(이 스레드가 CPU를 쓴 시간)의 차이 = 틱이 일을 못 하고 멈춰 있던 시간
+	struct SlowTick
+	{
+		uint64	tick = 0;
+		int64	workUs = 0;
+		int64	cpuUs = 0;							// GetThreadTimes 차이 (약 15.6ms 단위로만 올라감)
+		int64	partUs[TICK_PART_COUNT] = {};
+		uint32	cpuStart = 0;						// 시작할 때 CPU 번호 (시작 로그의 [Server] cpu efficiency class로 P / E코어를 봄)
+		uint32	cpuEnd = 0;							// 끝날 때 CPU 번호
+		uint64	viewChanges = 0;					// 그 틱의 S_SPAWN + S_DESPAWN 항목 수
+	};
+
 	// 10초(200틱) 통계 -> LogStats에서 출력 후 0으로
+	TickStats	_tickStats;
+	SlowTick	_slowTick;
 	EnterStats	_enterStats;			// ProcessEnter가 다섯 조각 모두 기록 (입장 응답을 바로 보내서 sendWait는 0, roomWait에 대기 목록 시간 포함)
 	uint64	_enterDeferred = 0;		// 대기 목록으로 간 입장 수
 	uint64	_enterQueueMax = 0;		// 대기 목록이 가장 길었을 때

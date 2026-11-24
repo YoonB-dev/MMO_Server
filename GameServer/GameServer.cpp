@@ -97,6 +97,34 @@ bool InitAuth()
 	return true;
 }
 
+// CPU 번호마다 성능 등급 (하이브리드 CPU: P코어가 높고 E코어가 낮음, 모두 같으면 하이브리드가 아님)
+//   [Room] slowest tick의 "cpu a -> b"를 읽을 때 씀 (느린 틱이 E코어에서 돌았는지)
+//   두 번 부르기: 처음엔 버퍼 없이 불러서 필요한 크기만 받고, 그만큼 잡아서 다시 부름 (Windows API에서 흔한 방식)
+void LogCpuTopology()
+{
+	ULONG size = 0;
+	::GetSystemCpuSetInformation(nullptr, 0, &size, ::GetCurrentProcess(), 0);
+	if (size == 0)
+		return;
+
+	vector<BYTE> buffer(size);
+	// reinterpret_cast: 바이트 배열을 그 안에 담긴 구조체 모양으로 보겠다는 형변환 (바이트는 그대로, 해석만 바뀜)
+	auto* first = reinterpret_cast<SYSTEM_CPU_SET_INFORMATION*>(buffer.data());
+	if (::GetSystemCpuSetInformation(first, size, &size, ::GetCurrentProcess(), 0) == FALSE)
+		return;
+
+	// 항목 크기가 정해져 있지 않아서(Size 필드) 바이트 단위로 Size만큼씩 건너뛰며 읽음
+	ostringstream line;
+	for (ULONG offset = 0; offset < size;)
+	{
+		const auto* info = reinterpret_cast<const SYSTEM_CPU_SET_INFORMATION*>(buffer.data() + offset);
+		if (info->Type == CpuSetInformation)
+			line << " " << static_cast<int32>(info->CpuSet.LogicalProcessorIndex) << ":" << static_cast<int32>(info->CpuSet.EfficiencyClass);
+		offset += info->Size;
+	}
+	LogLine() << "[Server] cpu efficiency class (cpu:class, higher = faster core):" << line.str();
+}
+
 ServerServiceRef StartServerService()
 {
 	ServerServiceRef service = MakeShared<ServerService>(
@@ -254,6 +282,8 @@ int main(int argc, char* argv[])
 
 	if (LoadServerConfig() == false)
 		return -1;
+
+	LogCpuTopology();	// 측정용: 어느 CPU 번호가 P / E코어인지 (틱이 튈 때 어느 코어였는지 보려고)
 
 	if (InitAuth() == false)
 		return -1;
