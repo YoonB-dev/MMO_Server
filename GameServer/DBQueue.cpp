@@ -13,7 +13,7 @@ shared_ptr<DBQueue> GDBQueue;
 //   입장   LoadCharacter  -> SELECT (고른 캐릭터 + 내 계정) -> SetPlayer -> _online에 추가 -> Room::Enter
 //   나감   Room::Leave    -> LeaveCharacter  -> UPDATE -> _online에서 뺌 -> (_waiting에 있으면) LoadCharacter
 //   중복   LoadCharacter  -> _online에 있음  -> 옛 세션 Disconnect, 새 세션은 _waiting -> 옛 세션의 LeaveCharacter가 이어 줌
-//   주기   Room::SaveAllPlayers -> SaveCharacters -> UPDATE 여러 줄
+//   주기   Room::SaveAllPlayers -> SaveCharacters -> 50명씩 SaveBatch (트랜잭션 하나에 여러 명)
 
 // steady_clock: 시계 맞춤으로 되돌아가지 않는 시계 (구간 재기용). int64: DoAsync에 넘기는 requestUs와 타입이 정확히 같아야 함
 static int64 NowUs()
@@ -197,11 +197,24 @@ void DBQueue::SaveCharacters(xvector<CharacterData> rows, int64 requestUs)
 		return;		// 다음 주기나 나갈 때 다시 저장됨
 	}
 
+	// 50명씩 트랜잭션 하나로 -> COMMIT(디스크 기록 대기)이 인원 수가 아니라 묶음 수만큼
 	int32 saved = 0;
-	for (const CharacterData& row : rows)
+	for (size_t begin = 0; begin < rows.size(); begin += SAVE_BATCH_SIZE)
 	{
-		if (SaveCharacter(db, row))
-			saved++;
+		const size_t end = (std::min)(begin + SAVE_BATCH_SIZE, rows.size());	// 마지막 묶음은 50명보다 적을 수 있음
+		if (SaveBatch(db, rows, begin, end))
+		{
+			saved += static_cast<int32>(end - begin);
+			continue;
+		}
+
+		// 묶음 안의 한 명 때문에 나머지까지 안 써지면 안 되므로, 그 묶음만 한 명씩 다시
+		LogLine() << "[DB] batch save failed, retrying one by one: " << (end - begin) << " character(s)";
+		for (size_t i = begin; i < end; i++)
+		{
+			if (SaveCharacter(db, rows[i]))
+				saved++;
+		}
 	}
 	_savedRows += saved;
 	LogLine() << "[DB] saved " << saved << " character(s)";
@@ -261,15 +274,42 @@ bool DBQueue::SaveCharacter(DBConnection& db, const CharacterData& data)
 	if (ExecuteRaw(db, L"START TRANSACTION") == false)
 		return false;
 
+	const bool ok = WriteCharacter(db, data);
+	return EndTransaction(db, ok);
+}
+
+// 여러 명을 한 트랜잭션으로: 전부 쓰이거나 하나도 안 쓰임 (실패하면 SaveCharacters가 그 묶음만 한 명씩 다시)
+//   행 잠금은 COMMIT까지 50명분을 잡음. 이 줄들은 DB 줄만 쓰므로 게임 서버 안에서는 기다리는 쪽이 없음
+bool DBQueue::SaveBatch(DBConnection& db, const xvector<CharacterData>& rows, size_t begin, size_t end)
+{
+	if (ExecuteRaw(db, L"START TRANSACTION") == false)
+		return false;
+
+	bool ok = true;
+	for (size_t i = begin; i < end && ok; i++)	// 한 명이라도 실패하면 바로 멈춤 -> ROLLBACK
+		ok = WriteCharacter(db, rows[i]);
+	return EndTransaction(db, ok);
+}
+
+// 쓰기만 (트랜잭션은 부르는 쪽이 엶). 한 명 저장과 묶음 저장이 같이 씀 -> 쓰는 내용이 한 곳에만 있음
+bool DBQueue::WriteCharacter(DBConnection& db, const CharacterData& data)
+{
 	// && 단락 평가: 앞이 실패하면 뒤를 실행하지 않음 -> 나머지 쓰기를 건너뛰고 ROLLBACK
 	bool ok = UpdateCharacter(db, data);
 	for (const ItemSlot& item : data.items)
 		ok = ok && UpsertItem(db, data.characterId, item);
-	ok = ok && DeleteEmptySlots(db, data);
+	return ok && DeleteEmptySlots(db, data);
+}
 
-	// 실패하면 반드시 ROLLBACK: 연결은 풀로 돌아가서 다른 일에 쓰이므로, 열린 트랜잭션이 남으면 다음 저장까지 묶임
-	ExecuteRaw(db, ok ? L"COMMIT" : L"ROLLBACK");
-	return ok;
+// 실패하면 반드시 ROLLBACK: 연결은 풀로 돌아가서 다른 일에 쓰이므로, 열린 트랜잭션이 남으면 다음 저장까지 묶임
+//   COMMIT이 실패한 경우도 실패로 셈 (예전에는 COMMIT 결과를 안 봐서 성공으로 셌음) + ROLLBACK으로 정리
+bool DBQueue::EndTransaction(DBConnection& db, bool ok)
+{
+	if (ok && ExecuteRaw(db, L"COMMIT"))
+		return true;
+
+	ExecuteRaw(db, L"ROLLBACK");
+	return false;
 }
 
 // 결과를 받지 않는 문장 (START TRANSACTION / COMMIT / ROLLBACK). 앞 문장의 커서를 닫고 실행

@@ -15,6 +15,8 @@ struct ItemSlot;
 class DBQueue : public JobQueue
 {
 	static constexpr uint64	STATS_INTERVAL_MS = 10000;	// [DB] 통계 간격 (Room의 [Room] 줄과 같은 10초)
+	static constexpr size_t	SAVE_BATCH_SIZE = 50;		// 주기 저장: 트랜잭션 하나에 몇 명 (COMMIT 수 = 인원 / 50)
+														//   COMMIT마다 디스크 기록을 기다려서(약 5ms) 한 명씩 COMMIT하면 400명에 2초 (Docs/LoadTest/README.md DB 기준선)
 
 	// 일감 종류 하나의 10초 통계 (이 줄 안에서만 읽고 씀 -> 락 / atomic 없음)
 	struct JobStats
@@ -45,7 +47,7 @@ private:
 	void	LoadCharacter(GameSessionRef session, int64 accountId, int64 characterId, int64 requestUs);
 	// 나감 (Room::Leave가 보냄): 저장 + 접속 목록에서 뺌 + 이 계정으로 기다리던 로그인이 있으면 이어서 불러옴
 	void	LeaveCharacter(CharacterData data, int64 requestUs);
-	// 주기 저장 (Room::SaveAllPlayers가 보냄): 여러 명을 연결 하나로 차례로 UPDATE
+	// 주기 저장 (Room::SaveAllPlayers가 보냄): 연결 하나로 SAVE_BATCH_SIZE명씩 트랜잭션 하나에 묶어서 저장
 	void	SaveCharacters(xvector<CharacterData> rows, int64 requestUs);
 	// 10초 통계 한 줄 + 0으로 + 다음 예약 (Room::Tick처럼 DoTimer로 자기 자신을 다시 예약)
 	void	LogStats();
@@ -53,7 +55,10 @@ private:
 private:
 	static bool	SelectCharacter(DBConnection& db, int64 accountId, int64 characterId, CharacterData& out, bool& found);
 	static bool	SelectItems(DBConnection& db, int64 characterId, vector<ItemSlot>& out);
-	static bool	SaveCharacter(DBConnection& db, const CharacterData& data);		// 한 트랜잭션: UpdateCharacter + UpsertItem + DeleteEmptySlots
+	static bool	SaveCharacter(DBConnection& db, const CharacterData& data);		// 한 명을 트랜잭션 하나로 (나감 저장, 묶음이 실패했을 때)
+	static bool	SaveBatch(DBConnection& db, const xvector<CharacterData>& rows, size_t begin, size_t end);	// rows[begin, end)를 트랜잭션 하나로 (주기 저장)
+	static bool	WriteCharacter(DBConnection& db, const CharacterData& data);	// 트랜잭션 없이 쓰기만: UpdateCharacter + UpsertItem + DeleteEmptySlots
+	static bool	EndTransaction(DBConnection& db, bool ok);						// ok면 COMMIT, 아니면(또는 COMMIT 실패) ROLLBACK. COMMIT까지 성공해야 true
 	static bool	ExecuteRaw(DBConnection& db, const WCHAR* sql);					// START TRANSACTION / COMMIT / ROLLBACK
 	static bool	DeleteEmptySlots(DBConnection& db, const CharacterData& data);
 	static bool	UpdateCharacter(DBConnection& db, const CharacterData& data);
