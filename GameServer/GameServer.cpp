@@ -268,6 +268,7 @@ int main(int argc, char* argv[])
 
 	ClientPacketHandler::Init();
 	GDBQueue = MakeShared<DBQueue>();	// 캐릭터 불러오기 / 저장 (게임 중 DB 일은 전부 이 줄로)
+	GDBQueue->StartStats();				// 10초마다 [DB] 통계 (shared_from_this를 쓰므로 MakeShared 다음에)
 	GRoom = MakeShared<Room>();
 	GRoom->SetMonsterSendPolicy(monsterSendPolicy);
 	GRoom->SetSaveInterval(ParseSaveIntervalSec(argc, argv));

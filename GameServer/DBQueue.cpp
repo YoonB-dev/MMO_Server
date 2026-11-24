@@ -15,8 +15,88 @@ shared_ptr<DBQueue> GDBQueue;
 //   중복   LoadCharacter  -> _online에 있음  -> 옛 세션 Disconnect, 새 세션은 _waiting -> 옛 세션의 LeaveCharacter가 이어 줌
 //   주기   Room::SaveAllPlayers -> SaveCharacters -> UPDATE 여러 줄
 
-void DBQueue::LoadCharacter(GameSessionRef session, int64 accountId, int64 characterId)
+// steady_clock: 시계 맞춤으로 되돌아가지 않는 시계 (구간 재기용). int64: DoAsync에 넘기는 requestUs와 타입이 정확히 같아야 함
+static int64 NowUs()
 {
+	return chrono::duration_cast<chrono::microseconds>(chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void DBQueue::JobStats::Add(int64 waitUs, int64 runUs)
+{
+	const uint64 wait = static_cast<uint64>((std::max)(waitUs, int64(0)));	// steady_clock이라 음수는 안 나오지만 혹시 몰라 0으로
+	const uint64 run = static_cast<uint64>((std::max)(runUs, int64(0)));
+	count++;
+	waitSumUs += wait;
+	runSumUs += run;
+	waitMaxUs = (std::max)(waitMaxUs, wait);
+	runMaxUs = (std::max)(runMaxUs, run);
+}
+
+// 만들 때 실행 시작 시각을 잡고, 범위가 끝날 때(소멸자) 대기 / 실행 시간을 stats에 더함
+//   RAII: 함수 중간의 어느 return으로 나가도 소멸자는 반드시 불림 (Room.cpp의 ScopedTimerUs와 같은 방식)
+struct DBQueue::ScopedJob
+{
+	JobStats&	stats;
+	int64		requestUs;
+	int64		startUs = NowUs();
+	~ScopedJob() { stats.Add(startUs - requestUs, NowUs() - startUs); }
+};
+
+void DBQueue::StartStats()
+{
+	DoTimer(STATS_INTERVAL_MS, &DBQueue::LogStats);
+}
+
+// 요청 입구: 부른 스레드에서 지금 시각을 잡고 줄에 넣음 (멤버 함수 포인터가 private이어도 여기는 DBQueue 안이라 됨)
+void DBQueue::RequestLoad(GameSessionRef session, int64 accountId, int64 characterId)
+{
+	DoAsync(&DBQueue::LoadCharacter, session, accountId, characterId, NowUs());
+}
+
+void DBQueue::RequestLeave(CharacterData data)
+{
+	DoAsync(&DBQueue::LeaveCharacter, std::move(data), NowUs());
+}
+
+void DBQueue::RequestSave(xvector<CharacterData> rows)
+{
+	DoAsync(&DBQueue::SaveCharacters, std::move(rows), NowUs());	// 받은 벡터를 복사하지 않고 Job으로 넘김
+}
+
+// 10초 동안 일감이 하나라도 있었을 때만 한 줄 (부하 테스트 Test/Load/Run-Load.ps1이 읽을 예정)
+//   wait: 요청 ~ 이 줄에서 시작 (앞 일감을 기다린 시간), run: 그 일감 자체 (DB 쿼리 포함)
+void DBQueue::LogStats()
+{
+	auto avgMs = [](uint64 sumUs, uint64 count) { return count > 0 ? sumUs / 1000.0 / count : 0.0; };
+
+	if (_loadStats.count + _leaveStats.count + _saveStats.count > 0)
+	{
+		const JobStats& l = _loadStats;
+		const JobStats& v = _leaveStats;
+		const JobStats& s = _saveStats;
+		LogLine() << "[DB] load " << l.count
+			<< " (wait avg " << avgMs(l.waitSumUs, l.count) << "ms max " << (l.waitMaxUs / 1000.0) << "ms"
+			<< ", run avg " << avgMs(l.runSumUs, l.count) << "ms max " << (l.runMaxUs / 1000.0) << "ms)"
+			<< ", leave " << v.count
+			<< " (wait avg " << avgMs(v.waitSumUs, v.count) << "ms max " << (v.waitMaxUs / 1000.0) << "ms"
+			<< ", run avg " << avgMs(v.runSumUs, v.count) << "ms max " << (v.runMaxUs / 1000.0) << "ms)"
+			<< ", save " << s.count << " (" << _savedRows << " rows"
+			<< ", wait avg " << avgMs(s.waitSumUs, s.count) << "ms max " << (s.waitMaxUs / 1000.0) << "ms"
+			<< ", run avg " << avgMs(s.runSumUs, s.count) << "ms max " << (s.runMaxUs / 1000.0) << "ms)";
+	}
+
+	_loadStats = JobStats{};
+	_leaveStats = JobStats{};
+	_saveStats = JobStats{};
+	_savedRows = 0;
+
+	DoTimer(STATS_INTERVAL_MS, &DBQueue::LogStats);
+}
+
+void DBQueue::LoadCharacter(GameSessionRef session, int64 accountId, int64 characterId, int64 requestUs)
+{
+	ScopedJob job{ _loadStats, requestUs };	// 아래 어느 return으로 나가도 이 일감의 시간이 기록됨
+
 	// 줄에서 기다리는 사이 이미 끊겼으면 DB도 안 부름
 	if (session->IsConnected() == false)
 		return;
@@ -37,7 +117,7 @@ void DBQueue::LoadCharacter(GameSessionRef session, int64 accountId, int64 chara
 				prev->Disconnect(L"Duplicate login");
 		}
 
-		_waiting[accountId] = WaitingLogin{ session, characterId };
+		_waiting[accountId] = WaitingLogin{ session, characterId, requestUs };
 		LogLine() << "[Login] duplicate login: account " << accountId << ", kicking old session";
 		return;
 	}
@@ -77,17 +157,21 @@ void DBQueue::LoadCharacter(GameSessionRef session, int64 accountId, int64 chara
 	GRoom->DoAsync(&Room::Enter, player);	// 입장 처리는 Room 줄에서 (세션이 아직 연결돼 있는지 한 번 더 봄)
 }
 
-void DBQueue::LeaveCharacter(CharacterData data)
+void DBQueue::LeaveCharacter(CharacterData data, int64 requestUs)
 {
+	// 시간은 이 블록(저장 + 목록 정리)만 잼. 아래에서 이어 부르는 LoadCharacter는 load로 따로 셈 (섞이지 않게)
 	{
-		DBConnectionGuard db(GDBConnectionPool);
-		if (db && SaveCharacter(db, data))
-			LogLine() << "[DB] saved character on leave: account " << data.accountId;
-		else
-			LogLine() << "[DB] failed to save character: account " << data.accountId;
-	}	// 연결은 여기서 반납 (아래 LoadCharacter가 또 빌림)
+		ScopedJob job{ _leaveStats, requestUs };
+		{
+			DBConnectionGuard db(GDBConnectionPool);
+			if (db && SaveCharacter(db, data))
+				LogLine() << "[DB] saved character on leave: account " << data.accountId;
+			else
+				LogLine() << "[DB] failed to save character: account " << data.accountId;
+		}	// 연결은 여기서 반납 (아래 LoadCharacter가 또 빌림)
 
-	_online.erase(data.accountId);
+		_online.erase(data.accountId);
+	}
 
 	// 이 계정으로 기다리던 새 로그인 -> 저장이 끝났으니 이제 불러옴 (같은 DB 줄 안이라 바로 호출)
 	auto waiting = _waiting.find(data.accountId);
@@ -95,14 +179,17 @@ void DBQueue::LeaveCharacter(CharacterData data)
 	{
 		GameSessionRef next = waiting->second.session.lock();
 		const int64 nextCharacterId = waiting->second.characterId;	// erase 전에 꺼내 둠 (지운 뒤에는 waiting을 못 씀)
+		const int64 nextRequestUs = waiting->second.requestUs;
 		_waiting.erase(waiting);
 		if (next != nullptr)
-			LoadCharacter(next, data.accountId, nextCharacterId);	// 기다리는 사이 끊겼으면 첫 줄 IsConnected에서 끝남
+			LoadCharacter(next, data.accountId, nextCharacterId, nextRequestUs);	// 기다리는 사이 끊겼으면 첫 줄 IsConnected에서 끝남
 	}
 }
 
-void DBQueue::SaveCharacters(xvector<CharacterData> rows)
+void DBQueue::SaveCharacters(xvector<CharacterData> rows, int64 requestUs)
 {
+	ScopedJob job{ _saveStats, requestUs };	// db보다 먼저 만듦 -> 소멸은 거꾸로라 연결 반납까지 run에 들어감
+
 	DBConnectionGuard db(GDBConnectionPool);
 	if (!db)	// explicit operator bool이라 == false로는 비교가 안 됨 (if 조건, !, && 안에서만 bool로 바뀜)
 	{
@@ -116,6 +203,7 @@ void DBQueue::SaveCharacters(xvector<CharacterData> rows)
 		if (SaveCharacter(db, row))
 			saved++;
 	}
+	_savedRows += saved;
 	LogLine() << "[DB] saved " << saved << " character(s)";
 }
 
