@@ -12,8 +12,8 @@ shared_ptr<DBRouter> GDBRouter;
 // 흐름 (같은 계정 기준, 전부 그 계정의 줄 하나에서 순서대로)
 //   줄 고르기 DBRouter::Request* -> accountId % 줄 수 -> 그 줄의 Request* (주기 저장은 계정별로 나눠서 줄마다)
 //   입장   LoadCharacter  -> SELECT (고른 캐릭터 + 내 계정) -> SetPlayer -> _online에 추가 -> Room::Enter
-//   나감   Room::Leave    -> LeaveCharacter  -> UPDATE -> _online에서 뺌 -> (_waiting에 있으면) LoadCharacter
-//   중복   LoadCharacter  -> _online에 있음  -> 옛 세션 Disconnect, 새 세션은 _waiting -> 옛 세션의 LeaveCharacter가 이어 줌
+//   나감   Room::Leave    -> LeaveCharacter(쌓기) -> FlushLeaves(50명씩 저장) -> _online에서 뺌 -> (_waiting에 있으면) LoadCharacter
+//   중복   LoadCharacter  -> _online에 있음  -> 옛 세션 Disconnect, 새 세션은 _waiting -> 옛 세션의 FlushLeaves가 이어 줌
 //   주기   Room::SaveAllPlayers -> SaveCharacters -> 50명씩 SaveBatch (트랜잭션 하나에 여러 명)
 
 void DBQueue::JobStats::Add(int64 waitUs, int64 runUs)
@@ -120,6 +120,7 @@ void DBQueue::LogStats()
 			<< ", save " << s.count << " (" << _savedRows << " rows"
 			<< ", wait avg " << avgMs(s.waitSumUs, s.count) << "ms max " << (s.waitMaxUs / 1000.0) << "ms"
 			<< ", run avg " << avgMs(s.runSumUs, s.count) << "ms max " << (s.runMaxUs / 1000.0) << "ms)"
+			<< ", leave flushes " << _leaveFlushes	// 나감 저장을 몇 번에 나눠 했나 (묶음 크기 = leave / 이 값)
 			<< ", queue " << _index;	// 맨 끝에 붙임 -> 앞부분 모양이 그대로라 Run-Load.ps1이 그대로 읽음
 	}
 
@@ -127,6 +128,7 @@ void DBQueue::LogStats()
 	_leaveStats = JobStats{};
 	_saveStats = JobStats{};
 	_savedRows = 0;
+	_leaveFlushes = 0;
 
 	DoTimer(STATS_INTERVAL_MS, &DBQueue::LogStats);
 }
@@ -196,33 +198,77 @@ void DBQueue::LoadCharacter(GameSessionRef session, int64 accountId, int64 chara
 	GRoom->DoAsync(&Room::Enter, player);	// 입장 처리는 Room 줄에서 (세션이 아직 연결돼 있는지 한 번 더 봄)
 }
 
+// 나감: 저장하지 않고 쌓기만. 저장 일(FlushLeaves)이 아직 줄에 없으면 지금 줄 맨 뒤에 하나
+//   이 줄을 실행하는 중에 DoAsync -> 바로 실행되지 않고 줄 뒤에 들어감 (JobQueue::Push: 실행 중인 줄은 넣기만)
+//   -> 그 사이 줄에 서 있던 나감들도 여기로 쌓여서 FlushLeaves 한 번에 같이 저장됨
+//   접속 목록(_online)은 저장이 끝날 때까지 그대로 -> 그 전에 온 같은 계정 로그인은 _waiting에서 기다림 (순서 유지)
 void DBQueue::LeaveCharacter(CharacterData data, int64 requestUs)
 {
-	// 시간은 이 블록(저장 + 목록 정리)만 잼. 아래에서 이어 부르는 LoadCharacter는 load로 따로 셈 (섞이지 않게)
-	{
-		ScopedJob job{ _leaveStats, requestUs };
-		{
-			DBConnectionGuard db(GDBConnectionPool);
-			if (db && SaveCharacter(db, data))
-				LogLine() << "[DB] saved character on leave: account " << data.accountId;
-			else
-				LogLine() << "[DB] failed to save character: account " << data.accountId;
-		}	// 연결은 여기서 반납 (아래 LoadCharacter가 또 빌림)
+	_leaveRows.push_back(std::move(data));
+	_leaveRequestUs.push_back(requestUs);
 
-		_online.erase(data.accountId);
-	}
-
-	// 이 계정으로 기다리던 새 로그인 -> 저장이 끝났으니 이제 불러옴 (같은 DB 줄 안이라 바로 호출)
-	auto waiting = _waiting.find(data.accountId);
-	if (waiting != _waiting.end())
+	if (_leaveFlushQueued == false)
 	{
-		GameSessionRef next = waiting->second.session.lock();
-		const int64 nextCharacterId = waiting->second.characterId;	// erase 전에 꺼내 둠 (지운 뒤에는 waiting을 못 씀)
-		const int64 nextRequestUs = waiting->second.requestUs;
-		_waiting.erase(waiting);
-		if (next != nullptr)
-			LoadCharacter(next, data.accountId, nextCharacterId, nextRequestUs);	// 기다리는 사이 끊겼으면 첫 줄 IsConnected에서 끝남
+		_leaveFlushQueued = true;
+		DoAsync(&DBQueue::FlushLeaves);
 	}
+}
+
+void DBQueue::FlushLeaves()
+{
+	_leaveFlushQueued = false;
+
+	// 통째로 가져옴: 이동 생성은 원소를 복사하지 않고 내용물(메모리)과 할당자를 함께 새 vector로 옮김
+	//   swap을 안 쓰는 이유: Debug의 vector::swap은 두 할당자를 ==로 비교하는데 ServerCore의 StlAllocator에는 ==가 없음
+	//   옮긴 뒤의 원래 vector는 "쓸 수는 있지만 내용은 정해지지 않은" 상태 -> clear()로 확실히 비움
+	//   -> 이 아래에서 이어 부르는 LoadCharacter 등과 상관없이 다음 나감은 다음 묶음으로
+	xvector<CharacterData> rows = std::move(_leaveRows);
+	xvector<int64> requestUs = std::move(_leaveRequestUs);
+	_leaveRows.clear();
+	_leaveRequestUs.clear();
+	if (rows.empty())
+		return;
+
+	const int64 startUs = NowUs();
+	xvector<uint8> saved(rows.size(), 0);
+	{
+		DBConnectionGuard db(GDBConnectionPool);
+		if (db)
+			SaveInBatches(db, rows, saved);
+	}	// 연결 반납 (아래 ResumeWaitingLogin의 LoadCharacter가 또 빌림)
+	const int64 endUs = NowUs();
+
+	// 통계: wait = 요청 ~ 이번 저장 시작 (대기 목록에서 기다린 시간 포함), run = 이번 저장 시간 / 인원
+	//   -> db_leave_run_avg_ms가 예전처럼 "한 명 저장에 든 시간"이 되게
+	_leaveFlushes++;
+	const int64 perRowUs = (endUs - startUs) / static_cast<int64>(rows.size());
+	for (size_t i = 0; i < rows.size(); i++)
+	{
+		_leaveStats.Add(startUs - requestUs[i], perRowUs);
+		if (saved[i])
+			LogLine() << "[DB] saved character on leave: account " << rows[i].accountId;
+		else
+			LogLine() << "[DB] failed to save character: account " << rows[i].accountId;
+
+		_online.erase(rows[i].accountId);	// 저장이 끝난 뒤에야 뺌 (실패해도 뺌: 예전과 같음, 안 빼면 그 계정이 다시 못 들어옴)
+		ResumeWaitingLogin(rows[i].accountId);
+	}
+}
+
+// 이 계정으로 기다리던 새 로그인 -> 저장이 끝났으니 이제 불러옴 (같은 DB 줄 안이라 바로 호출)
+//   시간은 load로 따로 셈 (LoadCharacter 안의 ScopedJob)
+void DBQueue::ResumeWaitingLogin(int64 accountId)
+{
+	auto waiting = _waiting.find(accountId);
+	if (waiting == _waiting.end())
+		return;
+
+	GameSessionRef next = waiting->second.session.lock();
+	const int64 nextCharacterId = waiting->second.characterId;	// erase 전에 꺼내 둠 (지운 뒤에는 waiting을 못 씀)
+	const int64 nextRequestUs = waiting->second.requestUs;
+	_waiting.erase(waiting);
+	if (next != nullptr)
+		LoadCharacter(next, accountId, nextCharacterId, nextRequestUs);	// 기다리는 사이 끊겼으면 첫 줄 IsConnected에서 끝남
 }
 
 void DBQueue::SaveCharacters(xvector<CharacterData> rows, int64 requestUs)
@@ -236,14 +282,24 @@ void DBQueue::SaveCharacters(xvector<CharacterData> rows, int64 requestUs)
 		return;		// 다음 주기나 나갈 때 다시 저장됨
 	}
 
-	// 50명씩 트랜잭션 하나로 -> COMMIT(디스크 기록 대기)이 인원 수가 아니라 묶음 수만큼
-	int32 saved = 0;
+	xvector<uint8> savedFlags(rows.size(), 0);
+	const int32 saved = SaveInBatches(db, rows, savedFlags);
+	_savedRows += saved;
+	LogLine() << "[DB] saved " << saved << " character(s)";
+}
+
+// 50명씩 트랜잭션 하나로 -> COMMIT(디스크 기록 대기)이 인원 수가 아니라 묶음 수만큼
+int32 DBQueue::SaveInBatches(DBConnection& db, const xvector<CharacterData>& rows, xvector<uint8>& saved)
+{
+	int32 count = 0;
 	for (size_t begin = 0; begin < rows.size(); begin += SAVE_BATCH_SIZE)
 	{
 		const size_t end = (std::min)(begin + SAVE_BATCH_SIZE, rows.size());	// 마지막 묶음은 50명보다 적을 수 있음
 		if (SaveBatch(db, rows, begin, end))
 		{
-			saved += static_cast<int32>(end - begin);
+			for (size_t i = begin; i < end; i++)
+				saved[i] = 1;
+			count += static_cast<int32>(end - begin);
 			continue;
 		}
 
@@ -252,11 +308,13 @@ void DBQueue::SaveCharacters(xvector<CharacterData> rows, int64 requestUs)
 		for (size_t i = begin; i < end; i++)
 		{
 			if (SaveCharacter(db, rows[i]))
-				saved++;
+			{
+				saved[i] = 1;
+				count++;
+			}
 		}
 	}
-	_savedRows += saved;
-	LogLine() << "[DB] saved " << saved << " character(s)";
+	return count;
 }
 
 bool DBQueue::SelectCharacter(DBConnection& db, int64 accountId, int64 characterId, CharacterData& out, bool& found)
