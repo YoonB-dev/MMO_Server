@@ -32,7 +32,7 @@ AOI 적용 전후를 같은 조건에서 비교하려고 남기는 측정 기록
   - `env.txt` 측정 환경 (CPU, RAM, OS, 빌드 구성, git 커밋, 실행 인자)
   - `server.txt` 서버 로그 전체, `bots.txt`, `outgame.txt`, `bots-wave.txt`(`-Wave`일 때)
   - `process.csv` 1초마다 서버 프로세스 CPU / 메모리 / 스레드 수
-  - `summary.txt` 측정 구간 계산 결과와 계산에 쓴 `[Room]` 줄, `[DB]` 줄
+  - `summary.txt` 측정 구간 계산 결과와 계산에 쓴 `[Room]` 줄, `[DB]` 줄, `[Room] enter` 줄
 - 정리본: `Docs/LoadTest/results.csv` (커밋 대상)
 
 ## results.csv 열
@@ -53,6 +53,13 @@ AOI 적용 전후를 같은 조건에서 비교하려고 남기는 측정 기록
 | `db_load_count`, `db_load_wait_avg_ms`, `db_load_wait_max_ms`, `db_load_run_avg_ms` | 캐릭터 불러오기: 건수, DB 줄에서 기다린 시간(요청 ~ 실행 시작), 쿼리 시간. 중복 로그인은 옛 세션의 저장을 기다린 시간까지 wait에 들어감 | `[DB]` 줄 (`DBQueue::LogStats`) |
 | `db_leave_count`, `db_leave_run_avg_ms` | 나감 저장 건수와 한 명 저장 시간 | `[DB]` 줄 |
 | `db_save_count`, `db_save_rows`, `db_save_run_max_ms` | 주기 저장 횟수, 저장한 캐릭터 수, 가장 오래 걸린 한 번. 이 시간 동안 같은 줄의 로그인이 기다림 | `[DB]` 줄 |
+| `tick_interval_peak_ms` | 측정 구간에서 틱 하나의 가장 긴 간격. `tick_interval_max_ms`는 200틱 평균 중 최댓값이라 한 번의 큰 밀림이 묻힘 | `[Room]` 줄 끝 `interval max` |
+| `enter_server_avg_ms`, `enter_server_max_ms` | 첫 무리: 서버 안에서 쓴 입장 시간 (C_ENTER_GAME 받음 ~ S_ENTER_GAME 실제 송신) | `[Room] enter` 줄 (`Room::LogStats`), 측정 시작 전 |
+| `enter_db_avg_ms` | 첫 무리: 받음 ~ DB 불러오기 끝 (DB 줄 대기 + 쿼리) | `[Room] enter` 줄 |
+| `enter_room_wait_avg_ms`, `enter_room_wait_max_ms` | 첫 무리: DB 줄이 넘긴 `Room::Enter`가 Room 줄에서 기다린 시간 | `[Room] enter` 줄 |
+| `enter_run_avg_ms` | 첫 무리: `Room::Enter` 하나의 처리 시간 (시야 채우기 포함) | `[Room] enter` 줄 |
+| `enter_send_wait_avg_ms`, `enter_send_wait_max_ms` | 첫 무리: `Room::Enter` 끝 ~ 틱 끝 `FlushSends` (실제 송신) | `[Room] enter` 줄 |
+| `wave_server_*`, `wave_db_avg_ms`, `wave_room_wait_*`, `wave_run_avg_ms`, `wave_send_wait_*` | 두 번째 무리: 위 8개와 같은 값 | `[Room] enter` 줄, 측정 시작 후 |
 
 ## 측정 계획
 
@@ -73,6 +80,7 @@ AOI 적용 전후를 같은 조건에서 비교하려고 남기는 측정 기록
 - 60초마다 주기 저장(전원 값 복사)이 측정 창 안에 한 번 들어간다. 실제 운영과 같은 조건이라 빼지 않는다.
 - `db_*` 열은 측정 창이 아니라 **실행 전체**의 `[DB]` 줄로 계산한다 (첫 무리의 로그인은 워밍업 전에 일어남). 서버를 강제로 끄므로 정리할 때의 나감 저장은 안 들어간다. 평균은 10초 줄마다의 평균을 건수로 가중해서 합친 값이다.
 - `9b2978a`부터 DB 줄이 4개라 `[DB]` 줄도 줄마다 하나씩 찍힌다(끝에 `queue N`). 그래서 `db_save_count`는 주기 저장 한 번이 4건으로 세어지고, `db_save_run_max_ms`는 가장 느린 줄의 저장 시간이다.
+- 입장 구간: 봇의 입장 지연(`enter_p50_ms`)에서 서버 안 시간(`enter_server_avg_ms`)을 빼면 네트워크와 봇 처리 시간이다 (백분위와 평균이라 대략으로만). `enter_*` 서버 열은 측정 시작 전(첫 무리), `wave_*` 서버 열은 측정 시작 후(두 번째 무리)의 `[Room] enter` 줄이다.
 
 ## 결과
 
