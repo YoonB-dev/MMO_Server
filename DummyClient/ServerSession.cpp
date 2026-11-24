@@ -57,6 +57,7 @@ void ServerSession::OnConnected()
 		enterPkt.set_access_token(GLogins[_clientId - 1].token);
 		enterPkt.set_character_id(GLogins[_clientId - 1].characterId);
 	}
+	enterSentUs = NowUs();	// 입장 지연 측정 시작 (Send 바로 앞: 토큰 준비 시간은 빼고 서버 왕복만)
 	Send(ServerPacketHandler::MakeSendBuffer(enterPkt));
 }
 

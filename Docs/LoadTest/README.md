@@ -20,6 +20,9 @@ AOI 적용 전후를 같은 조건에서 비교하려고 남기는 측정 기록
 | `-Configuration` | Release | 측정은 Release로만 한다 |
 | `-NoRecord` | | `results.csv`에 남기지 않음 |
 | `-Boss` | | 보스전: GameServer `--load-boss 2`(TestBoss, (0, 0)) + DummyClient `--bot-attack`(보스에게 붙어서 기본 공격). `results.csv`에 열이 없어서 `-Label`로 구분하고, 명중 수 / 스킬 처리 시간은 `summary.txt`에만 |
+| `-SaveIntervalSec` | 0 (서버 기본 60초) | 주기 저장 간격 (GameServer `--save-interval-sec`). 짧게 주면 저장이 로그인과 자주 겹침 |
+| `-Wave` | 0 | 측정 시작 때 두 번째 봇 무리를 한꺼번에 입장시킴 (계정 `loadw_1`부터). 이미 사람이 있는 서버에 몰리는 로그인 |
+| `-WaveReuse` | | 두 번째 무리가 첫 무리와 같은 계정(`load_1`부터)으로 들어옴 = 전원 중복 로그인 (재접속 폭주). `-Wave`는 `-Players` 이하 |
 
 준비: MySQL80 실행, OutGameServer 비밀값(`OutGameServer/Setup-Secrets.ps1`), Release 빌드(`-Build`).
 
@@ -27,9 +30,9 @@ AOI 적용 전후를 같은 조건에서 비교하려고 남기는 측정 기록
 
 - 원본: `Test/logs/load/<시각>_<label>_p<N>_m<M>/` (gitignore)
   - `env.txt` 측정 환경 (CPU, RAM, OS, 빌드 구성, git 커밋, 실행 인자)
-  - `server.txt` 서버 로그 전체, `bots.txt`, `outgame.txt`
+  - `server.txt` 서버 로그 전체, `bots.txt`, `outgame.txt`, `bots-wave.txt`(`-Wave`일 때)
   - `process.csv` 1초마다 서버 프로세스 CPU / 메모리 / 스레드 수
-  - `summary.txt` 측정 구간 계산 결과와 계산에 쓴 `[Room]` 줄
+  - `summary.txt` 측정 구간 계산 결과와 계산에 쓴 `[Room]` 줄, `[DB]` 줄
 - 정리본: `Docs/LoadTest/results.csv` (커밋 대상)
 
 ## results.csv 열
@@ -44,6 +47,12 @@ AOI 적용 전후를 같은 조건에서 비교하려고 남기는 측정 기록
 | `cpu_cores_avg`, `cpu_cores_max` | 서버가 쓴 CPU를 "코어 몇 개분"으로 | `Get-Process` |
 | `cpu_pct_avg` | 위 값을 PC 전체 기준 %로 | `Get-Process` |
 | `mem_mb_avg`, `mem_mb_max` | 서버 Working Set | `Get-Process` |
+| `enter_p50_ms`, `enter_p95_ms`, `enter_p99_ms`, `enter_max_ms` | 입장 지연: 봇이 C_ENTER_GAME을 보낸 뒤 S_ENTER_GAME(성공)을 받기까지 (nearest-rank 백분위). 서버가 틱 끝에 보내서 바닥이 최대 50ms. 이 열이 생기기 전 줄은 비어 있음 | 봇 로그 `enter_ms` |
+| `save_interval_s`, `wave_players`, `wave_reuse`, `wave_entered` | DB 상황: 주기 저장 간격, 두 번째 무리 인원, 같은 계정으로 들어왔는지, 실제로 들어온 수 | 실행 인자, `bots-wave.txt` |
+| `wave_enter_p50_ms` ~ `wave_enter_max_ms` | 두 번째 무리의 입장 지연 (위 `enter_*`와 같은 방식). DB 줄이 막히면 여기가 먼저 늘어남 | `bots-wave.txt` `enter_ms` |
+| `db_load_count`, `db_load_wait_avg_ms`, `db_load_wait_max_ms`, `db_load_run_avg_ms` | 캐릭터 불러오기: 건수, DB 줄에서 기다린 시간(요청 ~ 실행 시작), 쿼리 시간. 중복 로그인은 옛 세션의 저장을 기다린 시간까지 wait에 들어감 | `[DB]` 줄 (`DBQueue::LogStats`) |
+| `db_leave_count`, `db_leave_run_avg_ms` | 나감 저장 건수와 한 명 저장 시간 | `[DB]` 줄 |
+| `db_save_count`, `db_save_rows`, `db_save_run_max_ms` | 주기 저장 횟수, 저장한 캐릭터 수, 가장 오래 걸린 한 번. 이 시간 동안 같은 줄의 로그인이 기다림 | `[DB]` 줄 |
 
 ## 측정 계획
 
@@ -61,6 +70,7 @@ AOI 적용 전후를 같은 조건에서 비교하려고 남기는 측정 기록
 - `[Room]` 줄은 200틱(정상이면 10초) 구간 통계라서, 측정 창에서 처음 쓰는 줄은 그 전부터의 구간을 포함할 수 있다 (워밍업 뒤라 이미 정상 상태). 틱이 밀리면 한 줄이 10초보다 길어지므로, 초당 값은 "200틱 x 그 줄의 평균 틱 간격"으로 나눈다.
 - `work`는 틱 함수 안의 시간만이다. 패킷 핸들러가 Room에 넘긴 잡(`HandleSkill` 등)은 틱 밖에서 돌아서 안 잡힌다. 보스전처럼 그쪽이 무거우면 `work`는 멀쩡한데 틱 간격이 밀린다 -> `summary.txt`의 `skill work ms/s`와 틱 간격을 같이 본다.
 - 60초마다 주기 저장(전원 값 복사)이 측정 창 안에 한 번 들어간다. 실제 운영과 같은 조건이라 빼지 않는다.
+- `db_*` 열은 측정 창이 아니라 **실행 전체**의 `[DB]` 줄로 계산한다 (첫 무리의 로그인은 워밍업 전에 일어남). 서버를 강제로 끄므로 정리할 때의 나감 저장은 안 들어간다. 평균은 10초 줄마다의 평균을 건수로 가중해서 합친 값이다.
 
 ## 결과
 

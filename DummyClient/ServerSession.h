@@ -18,6 +18,8 @@ public:
 public:
 	// 이 세션의 패킷 핸들러에서만 접근 (한 세션의 recv는 한 번에 하나씩 처리되므로 락 없음)
 	uint64	myId = 0;				// S_ENTER_GAME으로 받은 내 캐릭터 id
+	int64	enterSentUs = 0;		// C_ENTER_GAME을 보낸 시각 (NowUs). S_ENTER_GAME을 받으면 빼서 입장 지연(enter_ms)
+									//   OnConnected가 쓰고 RegisterRecv 뒤의 수신 핸들러가 읽음 -> 순서가 보장돼서 락 없음
 	uint64	moveStartTick = 0;		// --move-test: 내가 처음 MOVING으로 찍힌 server_tick
 	bool	moveStopSent = false;	// --move-test: 멈춤 입력을 보냈는지
 	set<uint64>	monsterIds;			// S_SPAWN으로 받은 몬스터 id, S_DIE로 빠짐 (S_MOVE에서 플레이어/몬스터 항목 구분용)
