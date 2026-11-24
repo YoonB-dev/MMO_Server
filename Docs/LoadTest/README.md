@@ -586,3 +586,38 @@ C_ENTER_GAME 받음 -(db)-> DB 불러오기 끝 -(room wait)-> Room::Enter 시�
   - **틱 안 `work_max` 튐 (70~181ms)**: 틱 함수 안(`UpdatePlayers`, `UpdateMonsters`, `UpdateViews`, `FlushSends` 등)을 쪼개 재서 어디서 튀는지.
   - **중복 로그인 때 옛 세션이 Room에서 나가기까지 (약 140ms 추정)**: 끊기 -> `Room::Leave` -> `RequestLeave` 구간을 잰다.
   - **봇 쪽 약 25ms**, **800명 틱 일 35ms**: 위와 같음.
+
+### 틱 쪼개 보기 (커밋 `7ee46df`, 2026-11-25)
+
+틱 하나가 가끔 70~181ms로 튀는 원인을 가르려고 `Room::Tick`을 7조각(stats, save, players, monsters, views, hp, flush)으로 나눠 쟀다. 10초마다 가장 느린 틱 하나는 조각별 시간, **스레드 CPU 시간**(`GetThreadTimes`, 약 15.6ms 단위), 시작 / 끝 CPU 번호, 시야 변화 수를 남긴다(`[Room] tick cost`, `[Room] slowest tick` 줄, csv 열 없음). 이 PC는 CPU 0~11번이 P코어, 12~19번이 E코어다(시작 로그 `[Server] cpu efficiency class`). 측정만, 동작 변화 없음.
+
+| 틱 조각 평균 (ms) | 400명 120초 (`tick-cost-long`, 시작 구간 뺀 10초 구간들) | 800명 (`tick-cost-wave`, 800명이 된 뒤 10초 구간 3개) |
+|---|---|---|
+| views (`UpdateViews`) | 7.0~8.4 | 18.7~22.1 |
+| flush (`FlushSends`, 세션마다 WSASend) | 8.0~8.3 | 14.6~17.7 |
+| players, monsters, hp, stats, save | 합쳐서 0.3~0.5 | 0.6 |
+| work (틱 전체) | 16.5 | 34~41 |
+
+| 튄 틱 (`slowest tick`) | work | 스레드 CPU | CPU 번호 | 시야 변화 | views | flush |
+|---|---|---|---|---|---|---|
+| `tick-cost-wave` 856 | **179.2ms** | 62.5ms | 1 -> 8 | 669 | 42.5 | **135.7** |
+| `tick-cost-reconnect` 793 | **138.8ms** | 31.3ms | 7 -> 3 | 256 | 15.6 | **121.7** |
+| `tick-cost-wave` 1132 | 112.4ms | 109.4ms | **19** -> 11 | 561 | 51.5 | 59.6 |
+| `tick-cost-wave` 1324 | 100.9ms | 62.5ms | 9 -> **15** | 593 | 35.7 | 63.7 |
+| `tick-cost-wave` 780 | 61.6ms | 15.6ms | 1 -> 3 | 193 | 27.1 | 34.2 |
+| `tick-cost-long` 10초마다 (15번) | 24.6~32.6ms | 15.6~31.3ms | 14번 P코어, 1번 E코어(13 -> 10) | 131~288 | 7~17 | 8~14 |
+
+### 틱 쪼개 보기 해석
+
+- **평소 틱의 절반은 송신이다.** 400명일 때 틱 16.5ms 중 `FlushSends`가 약 8ms(세션 하나에 약 20µs), 시야 계산이 약 8ms다. 나머지(이동, 몬스터, HP)는 합쳐서 0.5ms 안쪽이다.
+- **크게 튄 틱(100~180ms)은 대부분 `FlushSends`이고, 그동안 스레드가 CPU를 거의 안 썼다.** 179ms 틱은 flush가 136ms인데 스레드 CPU는 62.5ms, 139ms 틱은 flush가 122ms인데 CPU는 31ms다. 즉 Room 틱이 송신 도중 **일을 못 하고 기다렸다**(가설 B).
+  - 코드상 의심 가는 곳(가설, 아직 안 잼): 송신이 끝날 때 IOCP 스레드의 `Session::ProcessSend`가 세션 락을 잡은 채 `RegisterSend` -> `WSASend`(시스템 호출)를 부른다. Room의 `PushSend` / `FlushSend`도 같은 세션 락을 잡아야 해서, 그 사이 Room 스레드가 기다린다. ServerCore의 락은 일정 횟수 돌다가 `yield`로 CPU를 내줘서 "걸린 시간 >> CPU 시간"과 맞는다. 사람이 몰리거나 재접속할 때(송신 완료, 끊김 처리로 IOCP 스레드가 바쁠 때) 튀는 것과도 맞는다.
+- **사람이 몰릴 때는 시야 계산도 진짜로 무겁다**(가설 A). 시야 변화가 560~670개인 틱은 views가 35~53ms다. 이건 CPU를 쓴 시간이다.
+- **E코어에서 돈 틱이 있다.** 112ms 틱은 CPU 19번(E코어)에서 시작했고 CPU 시간 109ms로 거의 다 일한 시간이다. 같은 일이 느린 코어에서 더 오래 걸린 것으로 보인다.
+- **몬스터 3마리가 10초에 한 번쯤 약 9.5ms를 쓴다.** 평균은 0.1~0.3ms인데 10초마다 최대가 거의 항상 9~10ms다. 몬스터 AI 안의 어떤 일이 가끔 무겁다(어느 함수인지는 아직 모름).
+- **아무 일 없는 400명에서의 181ms는 120초 동안 다시 나오지 않았다**(최대 32.6ms, 10초마다 가장 느린 틱 15개는 CPU 시간 ≈ 걸린 시간, 그중 하나만 E코어에서 시작).
+- **다음 후보**
+  - **송신 중 Room 스레드 대기**: `PushSend` / `FlushSend`에서 락을 기다린 시간을 재서 가설을 확인한다(ServerCore 쪽). 맞으면 `ProcessSend`가 `WSASend` 전에 락을 놓게 하거나, 송신을 Room 스레드 밖으로 옮기는 방법이 있다.
+  - **몰릴 때 시야 계산 35~53ms**
+  - **몬스터 9.5ms 튐**
+  - **Room 틱이 E코어에서 도는 것**: 워커 스레드를 P코어로 제한하는 방법(`SetThreadSelectedCpuSets`)이 있다.
