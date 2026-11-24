@@ -20,6 +20,14 @@ using MonsterRef = std::shared_ptr<class Monster>;
 using DropRef = std::shared_ptr<class Drop>;
 using RoomRef = std::shared_ptr<class Room>;
 
+// 구간 재기용 지금 시각 (마이크로초). steady_clock: 시계 맞춤으로 되돌아가지 않음
+//   inline: 헤더에 정의해도, 여러 .cpp가 포함할 때 "같은 함수가 여러 개" 링크 오류가 안 남 (하나로 합쳐짐)
+//   int64: DoAsync에 넘기는 requestUs와 타입이 정확히 같아야 함 (DBQueue)
+inline int64 NowUs()
+{
+	return chrono::duration_cast<chrono::microseconds>(chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 // 패킷 입/출력 수 (생성되는 ClientPacketHandler.h에서 증가시킴, 정의는 GameServer.cpp)
 extern std::atomic<int64> g_inboundPacketCount;
 extern std::atomic<int64> g_outboundPacketCount;

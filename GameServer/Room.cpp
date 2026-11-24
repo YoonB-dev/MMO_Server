@@ -142,9 +142,23 @@ void Room::SpawnMonster(MonsterSpawnData spawn)
 		<< " at (" << spawn.x << ", " << spawn.z << ")";
 }
 
+void Room::Span::Add(int64 us)
+{
+	const uint64 v = static_cast<uint64>((std::max)(us, int64(0)));
+	count++;
+	sumUs += v;
+	maxUs = (std::max)(maxUs, v);
+}
+
 void Room::Tick()
 {
 	_tick++;
+
+	// 틱 사이 간격 최댓값: 200틱 평균은 한 번 300ms 밀려도 51.6ms 정도로 묻힘
+	const int64 tickStartUs = NowUs();
+	if (_lastTickStartUs != 0)
+		_intervalMaxUs = (std::max)(_intervalMaxUs, static_cast<uint64>(tickStartUs - _lastTickStartUs));
+	_lastTickStartUs = tickStartUs;
 
 	// 게임 처리에 걸린 시간 측정 (GetTickCount64는 약 15ms 단위라 짧은 시간은 steady_clock으로)
 	const auto workStart = chrono::steady_clock::now();
@@ -202,7 +216,22 @@ void Room::LogStats(uint64 now)
 		<< ", work avg " << workAvgMs << "ms max " << workMaxMs << "ms"
 		<< ", monster moves " << _monsterMovesSent << " (" << _monsterSendPolicy->Name() << ")"
 		<< ", players " << _players.size() << ", monsters " << _monsters.size()
-		<< ", sent " << _sentPackets << " packets " << (_sentBytes / 1024) << " KB";
+		<< ", sent " << _sentPackets << " packets " << (_sentBytes / 1024) << " KB"
+		<< ", interval max " << (_intervalMaxUs / 1000.0) << "ms";	// 맨 끝에 붙임 -> 앞부분 모양이 그대로라 Run-Load.ps1이 그대로 읽음
+
+	// 입장 구간: 이 10초에 입장(송신까지 끝난 것)이 하나라도 있었을 때만
+	if (_enterStats.total.count > 0)
+	{
+		auto avgMs = [](const Span& s) { return s.count > 0 ? s.sumUs / 1000.0 / s.count : 0.0; };
+		auto maxMs = [](const Span& s) { return s.maxUs / 1000.0; };
+		const EnterStats& e = _enterStats;
+		LogLine() << "[Room] enter " << e.total.count
+			<< " (db avg " << avgMs(e.db) << " max " << maxMs(e.db)
+			<< ", room wait avg " << avgMs(e.roomWait) << " max " << maxMs(e.roomWait)
+			<< ", run avg " << avgMs(e.run) << " max " << maxMs(e.run)
+			<< ", send wait avg " << avgMs(e.sendWait) << " max " << maxMs(e.sendWait)
+			<< ", total avg " << avgMs(e.total) << " max " << maxMs(e.total) << ") ms";
+	}
 
 	// 시야: 한 명이 지금 보고 있는 객체 수 (AOI 효과를 숫자로 보려고. 지금 순간의 값)
 	if (_players.empty() == false)
@@ -238,6 +267,8 @@ void Room::LogStats(uint64 now)
 	}
 
 	_logStartTime = now;
+	_enterStats = EnterStats{};
+	_intervalMaxUs = 0;
 	_workTimeSumUs = 0;
 	_workTimeMaxUs = 0;
 	_monsterMovesSent = 0;
@@ -532,6 +563,8 @@ void Room::Enter(PlayerRef player)
 	if (session == nullptr || session->IsConnected() == false)
 		return;
 
+	const int64 startUs = NowUs();	// 입장 구간: DB 줄이 넘긴 뒤 이 줄에서 기다린 시간 + 이 함수의 처리 시간
+
 	const uint64 myId = player->GetObjectId();
 	_players[myId] = player;
 	_grid.Add(player);
@@ -561,6 +594,11 @@ void Room::Enter(PlayerRef player)
 
 	// 2. 시야: 주변을 나에게, 나를 주변에게 (방 전체가 아니라 들어오는 반경 안만)
 	EnterView(player);
+
+	// 입장 구간 기록. S_ENTER_GAME은 아직 쌓이기만 함 -> 실제 송신은 틱 끝 FlushSends (거기서 송신 대기를 잼)
+	session->enterDoneUs = NowUs();
+	_enterStats.roomWait.Add(startUs - session->enterLoadedUs);
+	_enterStats.run.Add(session->enterDoneUs - startUs);
 }
 
 void Room::Leave(PlayerRef player)
@@ -1559,6 +1597,15 @@ void Room::FlushSends()
 {
 	for (GameSessionRef& session : _pendingFlush)
 	{
+		// 이번 틱에 입장한 세션만 (평소에는 비교 한 번): S_ENTER_GAME이 지금 실제로 나감 -> 입장 구간 끝
+		if (session->enterDoneUs != 0)
+		{
+			const int64 nowUs = NowUs();
+			_enterStats.db.Add(session->enterLoadedUs - session->enterRecvUs);
+			_enterStats.sendWait.Add(nowUs - session->enterDoneUs);
+			_enterStats.total.Add(nowUs - session->enterRecvUs);
+			session->enterDoneUs = 0;
+		}
 		session->flushPending = false;
 		session->FlushSend();
 	}

@@ -196,7 +196,29 @@ private:
 	float	_loadMonsterArea = 0.f;
 	int32	_loadBossType = 0;		// --load-boss <monster_id>. 0이면 없음
 
+	// 시간 한 종류의 10초 통계 (Room 줄 안에서만 -> 락 없음)
+	struct Span
+	{
+		uint64	count = 0;
+		uint64	sumUs = 0;
+		uint64	maxUs = 0;
+		void	Add(int64 us);		// 음수는 0으로 (DBQueue::JobStats::Add와 같음)
+	};
+	// 입장 구간 다섯 조각: C_ENTER_GAME 받음 -(db)-> 불러옴 -(roomWait)-> Enter 시작 -(run)-> Enter 끝 -(sendWait)-> 송신
+	//   total = 받음 ~ 송신 (서버 안에서 쓴 시간 전부). 클라의 enter_ms - total = 네트워크 + 클라 처리
+	struct EnterStats
+	{
+		Span	db;
+		Span	roomWait;
+		Span	run;
+		Span	sendWait;
+		Span	total;
+	};
+
 	// 10초(200틱) 통계 -> LogStats에서 출력 후 0으로
+	EnterStats	_enterStats;			// Enter에서 roomWait / run, FlushSends에서 db / sendWait / total
+	int64	_lastTickStartUs = 0;	// 지난 틱 시작 시각 (NowUs) -> 틱 사이 간격 (0이면 첫 틱)
+	uint64	_intervalMaxUs = 0;		// 가장 길었던 틱 간격 (평균에 묻히는 한 번의 큰 밀림을 보려고)
 	uint64	_workTimeSumUs = 0;		// 틱 처리 시간 합 (마이크로초)
 	uint64	_workTimeMaxUs = 0;		// 가장 오래 걸린 틱
 	uint64	_monsterMovesSent = 0;	// S_MOVE에 넣은 몬스터 항목 수
