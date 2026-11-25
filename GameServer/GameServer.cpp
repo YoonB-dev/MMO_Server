@@ -141,15 +141,16 @@ void LogCpuTopology(const vector<CpuSet>& sets)
 	LogLine() << "[Server] cpu efficiency class (cpu:class, higher = faster core):" << line.str();
 }
 
-// GameServer.exe [--cpu-pin performance|all]  (기본 performance)
-//   performance: 성능 등급이 가장 높은 CPU에서만 돌게 (하이브리드 CPU에서 틱이 E코어로 옮겨져 2~3배 느려지는 것을 막음)
-//   all: 고정하지 않음 (예전과 같음, 비교 측정용)
+// GameServer.exe [--cpu-pin all|performance]  (기본 all)
+//   all: 고정하지 않음 (기본. P코어 고정 측정(Docs/LoadTest/README.md, 9c7a20f)에서 이 PC는 틱 평균이 15.4 -> 18.4ms로 오히려 늘었음:
+//        봇, MySQL과 P코어를 나눠 쓰게 돼서로 추정)
+//   performance: 성능 등급이 가장 높은 CPU에서만 (실험용: 하이브리드 CPU에서 E코어 영향을 다시 볼 때)
 //   SetProcessDefaultCpuSets: 프로세스의 스레드가 "되도록 이 CPU들에서" 돌게 하는 부드러운 지정
 //     (affinity mask는 "이 CPU에서만"이라는 강제. 하이브리드 CPU에서는 CPU Sets를 권함)
 //   워커 스레드를 띄우기 전에 부름
 void ApplyCpuPin(int argc, char* argv[], const vector<CpuSet>& sets)
 {
-	string mode = "performance";
+	string mode = "all";
 	for (int32 i = 1; i + 1 < argc; i++)
 	{
 		if (string(argv[i]) == "--cpu-pin")
@@ -345,7 +346,7 @@ int main(int argc, char* argv[])
 	if (LoadServerConfig() == false)
 		return -1;
 
-	// 어느 CPU 번호가 P / E코어인지 남기고, 하이브리드 CPU면 성능 등급이 가장 높은 CPU로 고정 (워커 스레드를 띄우기 전)
+	// 어느 CPU 번호가 P / E코어인지 남기고, --cpu-pin performance일 때만 성능 등급이 가장 높은 CPU로 고정 (워커 스레드를 띄우기 전)
 	const vector<CpuSet> cpuSets = ReadCpuSets();
 	LogCpuTopology(cpuSets);
 	ApplyCpuPin(argc, argv, cpuSets);
