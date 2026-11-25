@@ -145,7 +145,8 @@ private:
 	void	Tick();
 	void	LogStats(uint64 now);
 	// 틱 하나의 조각별 시간을 10초 통계에 더하고, 이번 10초에서 가장 느린 틱이면 내역을 남김
-	void	RecordTickCost(int64 workUs, const int64 (&partUs)[7], int64 cpuUs, uint32 cpuStart, uint32 cpuEnd, uint64 viewChanges);
+	//   partLockUs: 그 조각 동안 이 스레드가 락을 기다린 시간 (ServerCore LLockWaitUs의 앞뒤 차이)
+	void	RecordTickCost(int64 workUs, const int64 (&partUs)[7], const int64 (&partLockUs)[7], int64 cpuUs, uint32 cpuStart, uint32 cpuEnd, uint64 viewChanges);
 	void	ResetInputCounts();
 	void	UpdatePlayerStats();					// 1초마다 스탯 갱신 (자연 회복)
 	void	SaveAllPlayers();						// 주기 저장: 전원 값을 복사해서 DB 줄로
@@ -239,6 +240,7 @@ private:
 	struct TickStats
 	{
 		Span	part[TICK_PART_COUNT];
+		Span	lock[TICK_PART_COUNT];	// 그중 락을 기다린 시간 (송신이 락 대기인지 WSASend 자체인지 가르려고)
 	};
 	// 10초 동안 가장 느린 틱 하나의 내역 (조각별 최대는 서로 다른 틱일 수 있어서 같은 틱의 값을 따로 남김)
 	//   workUs(실제로 흐른 시간)와 cpuUs(이 스레드가 CPU를 쓴 시간)의 차이 = 틱이 일을 못 하고 멈춰 있던 시간
@@ -248,6 +250,7 @@ private:
 		int64	workUs = 0;
 		int64	cpuUs = 0;							// GetThreadTimes 차이 (약 15.6ms 단위로만 올라감)
 		int64	partUs[TICK_PART_COUNT] = {};
+		int64	partLockUs[TICK_PART_COUNT] = {};	// 조각마다 그중 락을 기다린 시간
 		uint32	cpuStart = 0;						// 시작할 때 CPU 번호 (시작 로그의 [Server] cpu efficiency class로 P / E코어를 봄)
 		uint32	cpuEnd = 0;							// 끝날 때 CPU 번호
 		uint64	viewChanges = 0;					// 그 틱의 S_SPAWN + S_DESPAWN 항목 수

@@ -162,10 +162,13 @@ static int64 ThreadCpuUs()
 	return (to64(kernel) + to64(user)) / 10;	// 100ns -> us
 }
 
-void Room::RecordTickCost(int64 workUs, const int64 (&partUs)[7], int64 cpuUs, uint32 cpuStart, uint32 cpuEnd, uint64 viewChanges)
+void Room::RecordTickCost(int64 workUs, const int64 (&partUs)[7], const int64 (&partLockUs)[7], int64 cpuUs, uint32 cpuStart, uint32 cpuEnd, uint64 viewChanges)
 {
 	for (int32 i = 0; i < TICK_PART_COUNT; i++)
+	{
 		_tickStats.part[i].Add(partUs[i]);
+		_tickStats.lock[i].Add(partLockUs[i]);
+	}
 
 	if (workUs <= _slowTick.workUs)
 		return;		// 이번 10초에서 가장 느린 틱만 남김
@@ -174,7 +177,10 @@ void Room::RecordTickCost(int64 workUs, const int64 (&partUs)[7], int64 cpuUs, u
 	_slowTick.workUs = workUs;
 	_slowTick.cpuUs = cpuUs;
 	for (int32 i = 0; i < TICK_PART_COUNT; i++)
+	{
 		_slowTick.partUs[i] = partUs[i];
+		_slowTick.partLockUs[i] = partLockUs[i];
+	}
 	_slowTick.cpuStart = cpuStart;
 	_slowTick.cpuEnd = cpuEnd;
 	_slowTick.viewChanges = viewChanges;
@@ -198,13 +204,17 @@ void Room::Tick()
 	const uint32 cpuStart = ::GetCurrentProcessorNumber();
 	const uint64 viewBefore = _viewSpawned + _viewDespawned;
 	int64 part[TICK_PART_COUNT] = {};
+	int64 partLock[TICK_PART_COUNT] = {};
 	int64 partStartUs = NowUs();
-	// [&]: 바깥의 part, partStartUs를 참조로 잡음 -> 부를 때마다 바깥 값을 바꾸고 이어서 씀
+	uint64 lockStartUs = LLockWaitUs;	// ServerCore TLS: 이 스레드가 락을 기다린 시간 누적 (틱은 한 스레드에서 끝까지 돎)
+	// [&]: 바깥의 part, partStartUs 등을 참조로 잡음 -> 부를 때마다 바깥 값을 바꾸고 이어서 씀
 	auto mark = [&](int32 index)
 		{
 			const int64 nowUs = NowUs();
 			part[index] = nowUs - partStartUs;
+			partLock[index] = static_cast<int64>(LLockWaitUs - lockStartUs);	// 이 조각에서 락을 기다린 시간
 			partStartUs = nowUs;
+			lockStartUs = LLockWaitUs;
 		};
 
 	if (_tick % TICKS_PER_SECOND == 0)
@@ -239,7 +249,7 @@ void Room::Tick()
 	_workTimeSumUs += workUs;
 	if (workUs > _workTimeMaxUs)
 		_workTimeMaxUs = workUs;
-	RecordTickCost(static_cast<int64>(workUs), part, ThreadCpuUs() - cpuStartUs, cpuStart, ::GetCurrentProcessorNumber(),
+	RecordTickCost(static_cast<int64>(workUs), part, partLock, ThreadCpuUs() - cpuStartUs, cpuStart, ::GetCurrentProcessorNumber(),
 		_viewSpawned + _viewDespawned - viewBefore);
 
 	// 입장 대기 목록: work(틱 일)와 섞이지 않게 기록 다음에. 다음 틱 예약(now) 전에 해야 예약 시각이 이만큼 밀리지 않음
@@ -284,6 +294,15 @@ void Room::LogStats(uint64 now)
 		line << "[Room] tick cost (";
 		for (int32 i = 0; i < TICK_PART_COUNT; i++)
 			line << (i > 0 ? ", " : "") << names[i] << " avg " << avgMs(_tickStats.part[i]) << " max " << (_tickStats.part[i].maxUs / 1000.0);
+		line << ") ms, lock wait (";
+		bool any = false;	// 락을 한 번도 안 기다린 조각은 생략
+		for (int32 i = 0; i < TICK_PART_COUNT; i++)
+		{
+			if (_tickStats.lock[i].maxUs == 0)
+				continue;
+			line << (any ? ", " : "") << names[i] << " avg " << avgMs(_tickStats.lock[i]) << " max " << (_tickStats.lock[i].maxUs / 1000.0);
+			any = true;
+		}
 		line << ") ms";
 	}
 	{
@@ -293,6 +312,15 @@ void Room::LogStats(uint64 now)
 			<< ", cpu " << s.cpuStart << " -> " << s.cpuEnd << ", view changes " << s.viewChanges << " (";
 		for (int32 i = 0; i < TICK_PART_COUNT; i++)
 			line << (i > 0 ? ", " : "") << names[i] << " " << (s.partUs[i] / 1000.0);
+		line << ") ms, lock wait (";
+		bool any = false;
+		for (int32 i = 0; i < TICK_PART_COUNT; i++)
+		{
+			if (s.partLockUs[i] == 0)
+				continue;
+			line << (any ? ", " : "") << names[i] << " " << (s.partLockUs[i] / 1000.0);
+			any = true;
+		}
 		line << ") ms";
 	}
 	_tickStats = TickStats{};
