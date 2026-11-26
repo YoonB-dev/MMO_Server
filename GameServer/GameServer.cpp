@@ -10,6 +10,7 @@
 #include "GameData.h"
 #include "JwtVerifier.h"
 #include "DBQueue.h"
+#include "SendQueue.h"
 #include "Player.h"	// Player::inventorySize (--inventory-size)
 
 std::atomic<int64> g_inboundPacketCount(0);
@@ -20,6 +21,7 @@ enum
 	WORKER_TICK = 64,
 	MAX_SESSION_COUNT = 1000,
 	DB_CONNECTION_COUNT = 4,
+	SEND_QUEUE_COUNT = 2,	// 송신 줄 수. 스레드는 워커 5 + main = 6개인데 재접속 폭주 때 DB 줄 4개 + Room 1개가 잡을 수 있어서 2로 시작 ([Send] 줄의 wait로 판단)
 };
 
 // 기본 true: 시작할 때 DB 접속 + 확인 쿼리 (config.ini의 [Database]). DB 없이 네트워크만 볼 때만 false
@@ -365,6 +367,8 @@ int main(int argc, char* argv[])
 	ClientPacketHandler::Init();
 	GDBRouter = MakeShared<DBRouter>();		// 캐릭터 불러오기 / 저장 (게임 중 DB 일은 전부 이 입구로)
 	GDBRouter->Init(DB_CONNECTION_COUNT);	// DB 줄 수 = 연결 수 (줄마다 10초 [DB] 통계)
+	GSendRouter = MakeShared<SendRouter>();	// 틱 끝 송신(WSASend)을 Room 스레드 밖에서 (Room::FlushSends가 목록을 넘김)
+	GSendRouter->Init(SEND_QUEUE_COUNT);	// 줄마다 10초 [Send] 통계
 	GRoom = MakeShared<Room>();
 	GRoom->SetMonsterSendPolicy(monsterSendPolicy);
 	GRoom->SetSaveInterval(ParseSaveIntervalSec(argc, argv));

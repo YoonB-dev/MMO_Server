@@ -146,7 +146,10 @@ private:
 	void	LogStats(uint64 now);
 	// 틱 하나의 조각별 시간을 10초 통계에 더하고, 이번 10초에서 가장 느린 틱이면 내역을 남김
 	//   partLockUs: 그 조각 동안 이 스레드가 락을 기다린 시간 (ServerCore LLockWaitUs의 앞뒤 차이)
-	void	RecordTickCost(int64 workUs, const int64 (&partUs)[7], const int64 (&partLockUs)[7], int64 cpuUs, uint32 cpuStart, uint32 cpuEnd, uint64 viewChanges);
+	struct FlushStats;	// 앞에서 이름만 알림 (정의는 아래 통계 구조체들과 같이). 참조로만 받아서 이걸로 충분
+	//   tickCycles / flushCycles: 틱 전체 / 송신 동안 이 스레드가 CPU에서 돈 사이클, flush: 송신을 세션별로 잰 결과
+	void	RecordTickCost(int64 workUs, const int64 (&partUs)[7], const int64 (&partLockUs)[7], int64 cpuUs, uint32 cpuStart, uint32 cpuEnd, uint64 viewChanges,
+				uint64 tickCycles, uint64 flushCycles, const FlushStats& flush);
 	void	ResetInputCounts();
 	void	UpdatePlayerStats();					// 1초마다 스탯 갱신 (자연 회복)
 	void	SaveAllPlayers();						// 주기 저장: 전원 값을 복사해서 DB 줄로
@@ -173,7 +176,7 @@ private:
 	void	SendMoves(const PlayerRef& player, Protocol::S_MOVE& all);				// 큰 S_MOVE를 나눠서 한 명에게
 	void	SendSpawns(const PlayerRef& player, const Protocol::S_SPAWN& all);	// 큰 S_SPAWN을 나눠서 한 명에게
 	void	SendTo(PlayerRef player, SendBufferRef sendBuffer);	// 큐에 넣기만 (PushSend) + 이번 틱 보낼 목록에 기록
-	void	FlushSends();										// 틱 맨 끝: 목록의 세션마다 FlushSend (WSASend 한 번)
+	void	FlushSends(FlushStats& out);						// 틱 맨 끝: 목록을 송신 줄로 넘김 (WSASend는 SendQueue에서) + 넘긴 수를 out에
 
 private:
 	xunordered_map<uint64, PlayerRef>	_players;	// JobQueue 안에서만 접근 -> 락 없음
@@ -242,6 +245,11 @@ private:
 		Span	part[TICK_PART_COUNT];
 		Span	lock[TICK_PART_COUNT];	// 그중 락을 기다린 시간 (송신이 락 대기인지 WSASend 자체인지 가르려고)
 	};
+	// 틱 끝 송신 (FlushSends가 채움 -> 가장 느린 틱 줄에 남김). 세션별 시간은 송신 줄(SendQueue)의 [Send] 줄로 옮김
+	struct FlushStats
+	{
+		int32	sessions = 0;		// 송신 줄로 넘긴 세션 수
+	};
 	// 10초 동안 가장 느린 틱 하나의 내역 (조각별 최대는 서로 다른 틱일 수 있어서 같은 틱의 값을 따로 남김)
 	//   workUs(실제로 흐른 시간)와 cpuUs(이 스레드가 CPU를 쓴 시간)의 차이 = 틱이 일을 못 하고 멈춰 있던 시간
 	struct SlowTick
@@ -254,7 +262,11 @@ private:
 		uint32	cpuStart = 0;						// 시작할 때 CPU 번호 (시작 로그의 [Server] cpu efficiency class로 P / E코어를 봄)
 		uint32	cpuEnd = 0;							// 끝날 때 CPU 번호
 		uint64	viewChanges = 0;					// 그 틱의 S_SPAWN + S_DESPAWN 항목 수
+		uint64	tickCycles = 0;						// 틱 동안 이 스레드가 CPU에서 돈 사이클 (QueryThreadCycleTime 차이)
+		uint64	flushCycles = 0;					// 그중 송신(FlushSends) 동안
+		FlushStats	flush;							// 송신을 세션별로 잰 결과
 	};
+	double	_cyclesPerUs = 0;		// 쉬지 않고 돌 때 1µs에 몇 사이클 (Start에서 한 번 잼). 사이클 / (시간 x 이 값) = CPU를 쓴 비율
 
 	// 10초(200틱) 통계 -> LogStats에서 출력 후 0으로
 	TickStats	_tickStats;
