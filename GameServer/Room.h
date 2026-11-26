@@ -254,6 +254,8 @@ private:
 		int64	maxUs = 0;			// 세션 하나가 가장 오래 걸린 시간
 		int32	slowCount = 0;		// 1ms 넘게 걸린 세션 수
 		int64	slowSumUs = 0;		// 그 세션들이 걸린 시간 합
+		int64	sumUs = 0;			// 모든 세션의 FlushSend 시간 합 (송신 구간 - 이 값 - clearUs = 루프 자체 비용)
+		int64	clearUs = 0;		// 끝의 _pendingFlush.clear() 시간 (마지막 참조였던 세션은 여기서 소멸 -> closesocket)
 	};
 	// 10초 동안 가장 느린 틱 하나의 내역 (조각별 최대는 서로 다른 틱일 수 있어서 같은 틱의 값을 따로 남김)
 	//   workUs(실제로 흐른 시간)와 cpuUs(이 스레드가 CPU를 쓴 시간)의 차이 = 틱이 일을 못 하고 멈춰 있던 시간

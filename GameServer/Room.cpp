@@ -367,6 +367,7 @@ void Room::LogStats(uint64 now)
 		line << ", flush sessions " << s.flush.sessions << " (closed " << s.flush.closed << ")"
 			<< ", one max " << (s.flush.maxUs / 1000.0) << "ms"
 			<< ", over 1ms " << s.flush.slowCount << " (sum " << (s.flush.slowSumUs / 1000.0) << "ms)"
+			<< ", all sessions sum " << (s.flush.sumUs / 1000.0) << "ms, clear " << (s.flush.clearUs / 1000.0) << "ms"
 			<< ", cpu busy tick " << busyPercent(s.tickCycles, s.workUs) << "%, flush " << busyPercent(s.flushCycles, s.partUs[6]) << "%";
 	}
 	_tickStats = TickStats{};
@@ -1817,6 +1818,7 @@ void Room::FlushSends(FlushStats& out)
 		const int64 us = NowUs() - startUs;
 
 		out.sessions++;
+		out.sumUs += us;
 		if (session->IsConnected() == false)
 			out.closed++;
 		out.maxUs = (std::max)(out.maxUs, us);
@@ -1826,5 +1828,7 @@ void Room::FlushSends(FlushStats& out)
 			out.slowSumUs += us;
 		}
 	}
-	_pendingFlush.clear();	// 크기만 0으로 (잡아 둔 메모리는 다음 틱에 재사용)
+	const int64 clearStartUs = NowUs();
+	_pendingFlush.clear();	// 크기만 0으로 (잡아 둔 메모리는 다음 틱에 재사용). 여기가 마지막 shared_ptr이면 세션 소멸자가 이 스레드에서
+	out.clearUs = NowUs() - clearStartUs;
 }
