@@ -60,6 +60,9 @@
     <ClCompile Include="DBQueue.cpp">
       <Filter>Game</Filter>
     </ClCompile>
+    <ClCompile Include="SendQueue.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
     <ClCompile Include="Enum.pb.cc">
       <Filter>Packet\Generated</Filter>
     </ClCompile>
@@ -111,6 +114,9 @@
       <Filter>Session</Filter>
     </ClInclude>
     <ClInclude Include="DBQueue.h">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="SendQueue.h">
       <Filter>Game</Filter>
     </ClInclude>
     <ClInclude Include="LogLine.h">

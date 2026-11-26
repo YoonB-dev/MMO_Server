@@ -7,6 +7,7 @@
 #include "MoveSendPolicy.h"
 #include "GameData.h"
 #include "DBQueue.h"
+#include "SendQueue.h"
 #include "Drop.h"
 #include <cmath>
 #include <limits>
@@ -357,17 +358,14 @@ void Room::LogStats(uint64 now)
 		}
 		line << ") ms";
 
-		// 송신 세션별 + CPU를 쓴 비율 (사이클 / (걸린 시간 x 기준값)). 정수 %로 반올림
+		// 송신으로 넘긴 세션 수 + CPU를 쓴 비율 (사이클 / (걸린 시간 x 기준값)). 정수 %로 반올림
 		auto busyPercent = [this](uint64 cycles, int64 us)
 			{
 				if (us <= 0 || _cyclesPerUs <= 0)
 					return 0;
 				return static_cast<int32>(100.0 * static_cast<double>(cycles) / (static_cast<double>(us) * _cyclesPerUs) + 0.5);
 			};
-		line << ", flush sessions " << s.flush.sessions << " (closed " << s.flush.closed << ")"
-			<< ", one max " << (s.flush.maxUs / 1000.0) << "ms"
-			<< ", over 1ms " << s.flush.slowCount << " (sum " << (s.flush.slowSumUs / 1000.0) << "ms)"
-			<< ", all sessions sum " << (s.flush.sumUs / 1000.0) << "ms, clear " << (s.flush.clearUs / 1000.0) << "ms"
+		line << ", flush sessions " << s.flush.sessions
 			<< ", cpu busy tick " << busyPercent(s.tickCycles, s.workUs) << "%, flush " << busyPercent(s.flushCycles, s.partUs[6]) << "%";
 	}
 	_tickStats = TickStats{};
@@ -1803,32 +1801,16 @@ void Room::SendTo(PlayerRef player, SendBufferRef sendBuffer)
 	}
 }
 
-// 틱 맨 끝: 이번 틱에 PushSend한 세션마다 FlushSend 한 번 (쌓인 패킷을 WSASend 한 번으로)
-//   _pendingFlush가 GameSessionRef(shared_ptr)를 들고 있어서 틱 사이에 끊겨도 세션 객체는 여기까지 살아 있음
-//   끊긴 세션이면 FlushSend가 연결 여부를 보고 그냥 끝남
-//   세션마다 걸린 시간도 잼 (out): 몇 명만 크게 막혔는지(WSASend가 커널에서 기다림) vs 모두 고르게 느렸는지
-//   NowUs 두 번은 수십 ns -> 800명이어도 틱당 약 0.05ms
+// 틱 맨 끝: 이번 틱에 PushSend한 세션 목록을 송신 줄(SendQueue)로 넘김. 실제 FlushSend(WSASend)는 다른 워커 스레드에서
+//   Room 틱은 WSASend를 기다리지 않음 (가끔 세션 몇 개가 수 ms~22ms씩 멈춰서 틱이 120ms까지 튀었음)
+//   _pendingFlush가 GameSessionRef(shared_ptr)를 들고 있어서 틱 사이에 끊겨도 세션 객체는 송신 줄까지 살아 있음
+//   세션별 시간은 송신 줄의 [Send] 줄에 (여기서는 넘긴 세션 수만)
 void Room::FlushSends(FlushStats& out)
 {
+	out.sessions = static_cast<int32>(_pendingFlush.size());
 	for (GameSessionRef& session : _pendingFlush)
-	{
-		session->flushPending = false;
-		const int64 startUs = NowUs();
-		session->FlushSend();
-		const int64 us = NowUs() - startUs;
+		session->flushPending = false;		// Room만 쓰는 값이라 넘기기 전에 Room에서 내림 (다음 틱 SendTo가 다시 목록에 넣음)
 
-		out.sessions++;
-		out.sumUs += us;
-		if (session->IsConnected() == false)
-			out.closed++;
-		out.maxUs = (std::max)(out.maxUs, us);
-		if (us >= 1'000)
-		{
-			out.slowCount++;
-			out.slowSumUs += us;
-		}
-	}
-	const int64 clearStartUs = NowUs();
-	_pendingFlush.clear();	// 크기만 0으로 (잡아 둔 메모리는 다음 틱에 재사용). 여기가 마지막 shared_ptr이면 세션 소멸자가 이 스레드에서
-	out.clearUs = NowUs() - clearStartUs;
+	GSendRouter->RequestFlush(std::move(_pendingFlush));	// 목록째 옮김 (shared_ptr 복사 없음)
+	_pendingFlush.clear();	// 옮겨진 뒤 상태를 확실히 빈 목록으로 (다음 틱에 다시 채움)
 }

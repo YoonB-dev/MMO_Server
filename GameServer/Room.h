@@ -176,7 +176,7 @@ private:
 	void	SendMoves(const PlayerRef& player, Protocol::S_MOVE& all);				// 큰 S_MOVE를 나눠서 한 명에게
 	void	SendSpawns(const PlayerRef& player, const Protocol::S_SPAWN& all);	// 큰 S_SPAWN을 나눠서 한 명에게
 	void	SendTo(PlayerRef player, SendBufferRef sendBuffer);	// 큐에 넣기만 (PushSend) + 이번 틱 보낼 목록에 기록
-	void	FlushSends(FlushStats& out);						// 틱 맨 끝: 목록의 세션마다 FlushSend (WSASend 한 번) + 세션별 시간을 out에
+	void	FlushSends(FlushStats& out);						// 틱 맨 끝: 목록을 송신 줄로 넘김 (WSASend는 SendQueue에서) + 넘긴 수를 out에
 
 private:
 	xunordered_map<uint64, PlayerRef>	_players;	// JobQueue 안에서만 접근 -> 락 없음
@@ -245,17 +245,10 @@ private:
 		Span	part[TICK_PART_COUNT];
 		Span	lock[TICK_PART_COUNT];	// 그중 락을 기다린 시간 (송신이 락 대기인지 WSASend 자체인지 가르려고)
 	};
-	// 틱 끝 송신을 세션별로 잰 결과 (FlushSends가 채움 -> 가장 느린 틱 줄에 남김)
-	//   "모두 조금씩 느렸는지" vs "몇 명이 크게 막혔는지"를 가르려고 최대값, 1ms 넘은 수, 그 합만 (세션마다 남기면 로그가 너무 큼)
+	// 틱 끝 송신 (FlushSends가 채움 -> 가장 느린 틱 줄에 남김). 세션별 시간은 송신 줄(SendQueue)의 [Send] 줄로 옮김
 	struct FlushStats
 	{
-		int32	sessions = 0;		// FlushSend를 부른 세션 수
-		int32	closed = 0;			// 그중 이미 끊긴 세션 수
-		int64	maxUs = 0;			// 세션 하나가 가장 오래 걸린 시간
-		int32	slowCount = 0;		// 1ms 넘게 걸린 세션 수
-		int64	slowSumUs = 0;		// 그 세션들이 걸린 시간 합
-		int64	sumUs = 0;			// 모든 세션의 FlushSend 시간 합 (송신 구간 - 이 값 - clearUs = 루프 자체 비용)
-		int64	clearUs = 0;		// 끝의 _pendingFlush.clear() 시간 (마지막 참조였던 세션은 여기서 소멸 -> closesocket)
+		int32	sessions = 0;		// 송신 줄로 넘긴 세션 수
 	};
 	// 10초 동안 가장 느린 틱 하나의 내역 (조각별 최대는 서로 다른 틱일 수 있어서 같은 틱의 값을 따로 남김)
 	//   workUs(실제로 흐른 시간)와 cpuUs(이 스레드가 CPU를 쓴 시간)의 차이 = 틱이 일을 못 하고 멈춰 있던 시간
