@@ -150,6 +150,42 @@ void Room::Span::Add(int64 us)
 	maxUs = (std::max)(maxUs, v);
 }
 
+// 이 스레드가 지금까지 CPU에서 돈 시간 (커널 + 사용자, 마이크로초)
+//   FILETIME은 100ns 단위의 64비트 값을 32비트 두 개(High, Low)로 나눠 담음 -> (High << 32) | Low로 합침
+//   Windows는 이 값을 시계 인터럽트(약 15.6ms)마다 올림 -> 100ms 넘게 튄 틱을 가르는 데는 충분, 작은 차이는 못 봄
+static int64 ThreadCpuUs()
+{
+	FILETIME creation, exit, kernel, user;
+	if (::GetThreadTimes(::GetCurrentThread(), &creation, &exit, &kernel, &user) == FALSE)
+		return 0;
+	auto to64 = [](const FILETIME& f) { return (static_cast<int64>(f.dwHighDateTime) << 32) | f.dwLowDateTime; };
+	return (to64(kernel) + to64(user)) / 10;	// 100ns -> us
+}
+
+void Room::RecordTickCost(int64 workUs, const int64 (&partUs)[7], const int64 (&partLockUs)[7], int64 cpuUs, uint32 cpuStart, uint32 cpuEnd, uint64 viewChanges)
+{
+	for (int32 i = 0; i < TICK_PART_COUNT; i++)
+	{
+		_tickStats.part[i].Add(partUs[i]);
+		_tickStats.lock[i].Add(partLockUs[i]);
+	}
+
+	if (workUs <= _slowTick.workUs)
+		return;		// 이번 10초에서 가장 느린 틱만 남김
+
+	_slowTick.tick = _tick;
+	_slowTick.workUs = workUs;
+	_slowTick.cpuUs = cpuUs;
+	for (int32 i = 0; i < TICK_PART_COUNT; i++)
+	{
+		_slowTick.partUs[i] = partUs[i];
+		_slowTick.partLockUs[i] = partLockUs[i];
+	}
+	_slowTick.cpuStart = cpuStart;
+	_slowTick.cpuEnd = cpuEnd;
+	_slowTick.viewChanges = viewChanges;
+}
+
 void Room::Tick()
 {
 	_tick++;
@@ -163,15 +199,35 @@ void Room::Tick()
 	// 게임 처리에 걸린 시간 측정 (GetTickCount64는 약 15ms 단위라 짧은 시간은 steady_clock으로)
 	const auto workStart = chrono::steady_clock::now();
 
+	// 틱 조각 측정: 조각 사이마다 시각 한 번 + 스레드 CPU 시간 / CPU 번호 / 시야 변화 수 (측정만, 동작은 그대로)
+	const int64 cpuStartUs = ThreadCpuUs();
+	const uint32 cpuStart = ::GetCurrentProcessorNumber();
+	const uint64 viewBefore = _viewSpawned + _viewDespawned;
+	int64 part[TICK_PART_COUNT] = {};
+	int64 partLock[TICK_PART_COUNT] = {};
+	int64 partStartUs = NowUs();
+	uint64 lockStartUs = LLockWaitUs;	// ServerCore TLS: 이 스레드가 락을 기다린 시간 누적 (틱은 한 스레드에서 끝까지 돎)
+	// [&]: 바깥의 part, partStartUs 등을 참조로 잡음 -> 부를 때마다 바깥 값을 바꾸고 이어서 씀
+	auto mark = [&](int32 index)
+		{
+			const int64 nowUs = NowUs();
+			part[index] = nowUs - partStartUs;
+			partLock[index] = static_cast<int64>(LLockWaitUs - lockStartUs);	// 이 조각에서 락을 기다린 시간
+			partStartUs = nowUs;
+			lockStartUs = LLockWaitUs;
+		};
+
 	if (_tick % TICKS_PER_SECOND == 0)
 	{
 		ResetInputCounts();
 		UpdatePlayerStats();
 		ExpireDrops();
 	}
+	mark(0);	// stats
 
 	if (_tick % _saveIntervalTicks == 0)
 		SaveAllPlayers();
+	mark(1);	// save
 
 	// 이번 틱에 바뀐 이동을 전체 목록(pkt)에 모은 뒤, 플레이어마다 시야 안의 것만 골라서 보냄
 	//   플레이어 먼저 -> 몬스터는 이번 틱에 움직인 플레이어 위치를 보고 판단
@@ -179,15 +235,22 @@ void Room::Tick()
 	Protocol::S_MOVE pkt;
 	pkt.set_server_tick(_tick);
 	UpdatePlayers(pkt);
+	mark(2);	// players
 	UpdateMonsters(pkt);
+	mark(3);	// monsters
 	UpdateViews(pkt);
+	mark(4);	// views
 	FlushHpChanges();	// 시야 다음: 이번 틱에 새로 보인 사람은 S_SPAWN에 지금 HP가 이미 실려 있음
+	mark(5);	// hp
 	FlushSends();		// 맨 끝: 이번 틱(과 지난 틱 이후 잡)에서 쌓인 패킷을 세션마다 WSASend 한 번
+	mark(6);	// flush
 
 	const uint64 workUs = chrono::duration_cast<chrono::microseconds>(chrono::steady_clock::now() - workStart).count();
 	_workTimeSumUs += workUs;
 	if (workUs > _workTimeMaxUs)
 		_workTimeMaxUs = workUs;
+	RecordTickCost(static_cast<int64>(workUs), part, partLock, ThreadCpuUs() - cpuStartUs, cpuStart, ::GetCurrentProcessorNumber(),
+		_viewSpawned + _viewDespawned - viewBefore);
 
 	// 입장 대기 목록: work(틱 일)와 섞이지 않게 기록 다음에. 다음 틱 예약(now) 전에 해야 예약 시각이 이만큼 밀리지 않음
 	DrainPendingEnters();
@@ -221,6 +284,47 @@ void Room::LogStats(uint64 now)
 		<< ", players " << _players.size() << ", monsters " << _monsters.size()
 		<< ", sent " << _sentPackets << " packets " << (_sentBytes / 1024) << " KB"
 		<< ", interval max " << (_intervalMaxUs / 1000.0) << "ms";	// 맨 끝에 붙임 -> 앞부분 모양이 그대로라 Run-Load.ps1이 그대로 읽음
+
+	// 틱 7조각 + 가장 느린 틱 (Run-Load.ps1의 [Room] tick 정규식은 "tick (숫자)," 모양이라 아래 두 줄에는 안 걸림)
+	//   LogLine을 이름 있는 변수로 만들어서 for문으로 이어 붙임 -> 블록 끝에서 소멸하며 한 줄로 출력
+	static const char* const names[TICK_PART_COUNT] = { "stats", "save", "players", "monsters", "views", "hp", "flush" };
+	{
+		auto avgMs = [](const Span& s) { return s.count > 0 ? s.sumUs / 1000.0 / s.count : 0.0; };
+		LogLine line;
+		line << "[Room] tick cost (";
+		for (int32 i = 0; i < TICK_PART_COUNT; i++)
+			line << (i > 0 ? ", " : "") << names[i] << " avg " << avgMs(_tickStats.part[i]) << " max " << (_tickStats.part[i].maxUs / 1000.0);
+		line << ") ms, lock wait (";
+		bool any = false;	// 락을 한 번도 안 기다린 조각은 생략
+		for (int32 i = 0; i < TICK_PART_COUNT; i++)
+		{
+			if (_tickStats.lock[i].maxUs == 0)
+				continue;
+			line << (any ? ", " : "") << names[i] << " avg " << avgMs(_tickStats.lock[i]) << " max " << (_tickStats.lock[i].maxUs / 1000.0);
+			any = true;
+		}
+		line << ") ms";
+	}
+	{
+		const SlowTick& s = _slowTick;
+		LogLine line;
+		line << "[Room] slowest tick " << s.tick << ": work " << (s.workUs / 1000.0) << "ms, thread cpu " << (s.cpuUs / 1000.0) << "ms"
+			<< ", cpu " << s.cpuStart << " -> " << s.cpuEnd << ", view changes " << s.viewChanges << " (";
+		for (int32 i = 0; i < TICK_PART_COUNT; i++)
+			line << (i > 0 ? ", " : "") << names[i] << " " << (s.partUs[i] / 1000.0);
+		line << ") ms, lock wait (";
+		bool any = false;
+		for (int32 i = 0; i < TICK_PART_COUNT; i++)
+		{
+			if (s.partLockUs[i] == 0)
+				continue;
+			line << (any ? ", " : "") << names[i] << " " << (s.partLockUs[i] / 1000.0);
+			any = true;
+		}
+		line << ") ms";
+	}
+	_tickStats = TickStats{};
+	_slowTick = SlowTick{};
 
 	// 입장 구간: 이 10초에 입장(송신까지 끝난 것)이 하나라도 있었을 때만
 	if (_enterStats.total.count > 0)
