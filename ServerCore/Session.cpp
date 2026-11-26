@@ -275,7 +275,6 @@ void Session::ProcessConnect()
 void Session::ProcessDisConnect()
 {
 	_disConnectEvent.owner = nullptr; // 일단 릴리즈를 함.
-	cout << "123123123" << endl;
 	OnDisconnected();
 	GetService()->ReleaseSession(GetSessionRef());
 }

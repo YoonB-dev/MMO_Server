@@ -17,7 +17,8 @@ Assert-LogCount -Name server -Pattern '\[Room\] level up: player \d+ -> 3' -Expe
 # 경험치를 받은 사람 = 서버가 말한 처치자(마지막 공격자)인지
 #   서버 로그의 처치자 id -> 그 id로 입장한 클라 번호 -> 그 클라만 S_CHANGE_EXP를 받았는지
 $killer = Get-LogNumber -Name server -Pattern 'killed by (\d+)'
-$killerClient = Get-LogNumber -Name A -Pattern "\[Client (\d+)\] S_ENTER_GAME success=1 myId=$killer "
+#   봇 로그에 enter_ms가 생겨서(2a5bb4f) success=1과 myId 사이를 .*로 건너뜀 (다른 시나리오와 같은 방식)
+$killerClient = Get-LogNumber -Name A -Pattern "\[Client (\d+)\] S_ENTER_GAME success=1 .*myId=$killer "
 Assert-LogCount -Name server -Pattern "level up: player $killer -> 3" -Expected 1
 Assert-LogCount -Name A -Pattern "\[Client $killerClient\] S_CHANGE_EXP level=3 exp=10" -Expected 1
 

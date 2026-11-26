@@ -4,6 +4,10 @@
 #   .\Test\Load\Run-Load.ps1 -Build ...                   Release 빌드부터 (GameServer, DummyClient, OutGameServer)
 #   .\Test\Load\Run-Load.ps1 -Boss -Monsters 0 -Area 15 -Label boss-before
 #                                                         보스전: (0, 0)에 TestBoss(HP 5천만) + 봇이 모두 보스에게 붙어서 기본 공격
+#   .\Test\Load\Run-Load.ps1 -Monsters 0 -SaveIntervalSec 10 -Wave 400 -Label db-wave
+#                                                         DB: 측정 시작 때 두 번째 무리 400명이 한꺼번에 입장 (주기 저장과 겹치는 로그인)
+#   .\Test\Load\Run-Load.ps1 -Monsters 0 -Wave 400 -WaveReuse -Label db-reconnect
+#                                                         DB: 두 번째 무리가 첫 무리와 같은 계정 = 전원 중복 로그인 (재접속 폭주)
 #   스크립트 실행이 막혀 있으면: powershell -ExecutionPolicy Bypass -File .\Test\Load\Run-Load.ps1 ...
 #
 # 순서: DB 준비 -> OutGameServer + GameServer(--load-monsters) -> 봇 입장 -> 워밍업(맵에 흩어지는 시간) -> 측정 -> 정리
@@ -12,8 +16,9 @@
 # 남기는 것
 #   Test/logs/load/<시각>_<label>_p<N>_m<M>/   원본 (gitignore)
 #     env.txt       측정 환경 (CPU, RAM, OS, 빌드 구성, git 커밋, 실행 인자)
-#     server.txt    GameServer 로그 전체 ([Room] 10초 통계 줄)
+#     server.txt    GameServer 로그 전체 ([Room], [DB] 10초 통계 줄)
 #     bots.txt      DummyClient 로그
+#     bots-wave.txt 두 번째 무리 DummyClient 로그 (-Wave일 때만)
 #     outgame.txt   OutGameServer 로그
 #     process.csv   1초마다 서버 프로세스 CPU / 메모리 / 스레드 수
 #     summary.txt   측정 구간만 계산한 결과
@@ -29,7 +34,10 @@ param(
     [string]$Configuration = 'Release',
     [switch]$Build,
     [switch]$NoRecord,
-    [switch]$Boss           # 보스전 (GameServer --load-boss 2, DummyClient --bot-attack). results.csv에는 열이 따로 없어서 -Label로 구분
+    [switch]$Boss,          # 보스전 (GameServer --load-boss 2, DummyClient --bot-attack). results.csv에는 열이 따로 없어서 -Label로 구분
+    [int]$SaveIntervalSec = 0,  # 주기 저장 간격 (GameServer --save-interval-sec). 0이면 서버 기본값(60초) 그대로
+    [int]$Wave = 0,             # 측정 시작 때 한꺼번에 들어오는 두 번째 무리 (0이면 없음)
+    [switch]$WaveReuse          # 두 번째 무리가 첫 무리와 같은 계정(load_1...) = 전원 중복 로그인 (재접속 폭주)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,13 +50,23 @@ $runDir  = Join-Path $testDir "logs\load\$runName"
 Initialize-TestContext -Configuration $Configuration -LogDir $runDir
 
 $serverArgs = "--load-monsters $Monsters --load-area $Area"
-$botArgs    = "--count $Players --account-prefix load --no-ping --bot --area $Area"
+$botCommon  = "--no-ping --bot --area $Area"    # 첫 무리와 두 번째 무리(-Wave)가 같이 쓰는 봇 인자
 $bossType   = 2     # Database/Data/monster.sql의 TestBoss
 if ($Boss)
 {
     $serverArgs += " --load-boss $bossType"
-    $botArgs    += ' --bot-attack'
+    $botCommon  += ' --bot-attack'
 }
+$botArgs    = "--count $Players --account-prefix load $botCommon"
+$serverDefaultSaveSec = 60  # GameServer.cpp ParseSaveIntervalSec의 기본값 (csv에 실제 간격을 남기려고)
+$saveIntervalUsed = if ($SaveIntervalSec -gt 0) { $SaveIntervalSec } else { $serverDefaultSaveSec }
+if ($SaveIntervalSec -gt 0) { $serverArgs += " --save-interval-sec $SaveIntervalSec" }
+
+# 두 번째 무리: 첫 무리와 같은 봇. 계정만 다르게(loadw_) 또는 같게(load_, -WaveReuse)
+if ($WaveReuse -and $Wave -le 0) { throw '-WaveReuse needs -Wave N' }
+if ($WaveReuse -and $Wave -gt $Players) { throw '-WaveReuse: -Wave must be <= -Players (it reuses the first group accounts)' }
+$wavePrefix = if ($WaveReuse) { 'load' } else { 'loadw' }
+$waveArgs   = "--count $Wave --account-prefix $wavePrefix $botCommon"
 
 # ==================== 측정 환경 (env.txt) ====================
 
@@ -73,6 +91,8 @@ $envLines = @(
     "git           $branch @ $commit$(if ($dirty) { ' (uncommitted changes)' })"
     "server args   $serverArgs"
     "bot args      $botArgs"
+    "wave          $(if ($Wave -gt 0) { "$Wave at measure start$(if ($WaveReuse) { ' (same accounts: duplicate logins)' }), args $waveArgs" } else { 'none' })"
+    "save interval $saveIntervalUsed s"
     "players       $Players"
     "monsters      $Monsters (+ data_monster_spawn)$(if ($Boss) { " + boss (type $bossType) at (0, 0)" })"
     "area          +-$Area m"
@@ -93,10 +113,18 @@ $roomPattern = '\[Room\] tick (\d+), avg interval ([\d.e+-]+)ms, work avg ([\d.e
 
 $hitPattern = '\[Room\] skill hits (\d+), skill work ([\d.e+-]+) ms'   # 플레이어 스킬 명중 수와 HandleSkill 처리 시간 (10초 구간, 명중 0이면 안 찍힘)
 
+# 서버 [DB] 10초 통계 한 줄 (DBQueue::LogStats). 일감 종류마다 "건수 (wait avg/max, run avg/max)", save는 저장한 줄 수가 더 있음
+$num = '([\d.e+-]+)'
+$dbJob = "\(wait avg ${num}ms max ${num}ms, run avg ${num}ms max ${num}ms\)"
+$dbPattern = "\[DB\] load (\d+) $dbJob, leave (\d+) $dbJob, save (\d+) \((\d+) rows, wait avg ${num}ms max ${num}ms, run avg ${num}ms max ${num}ms\)"
+
 $samples   = New-Object System.Collections.Generic.List[object]
 $roomRows  = @()
 $hitRows   = @()
+$enterMs   = @()    # 성공한 입장마다 봇이 잰 입장 지연 (ms, 작은 순으로 정렬)
+$waveMs    = @()    # 두 번째 무리의 입장 지연 (같은 방식)
 $entered   = 0
+$waveEntered = 0
 $alive     = $false
 
 try
@@ -117,6 +145,10 @@ try
     $entered = Get-LogMatchCount -Name 'bots' -Pattern 'S_ENTER_GAME success=1'
     Write-Host "  entered: $entered / $Players"
 
+    # 입장 지연: DummyClient가 성공한 S_ENTER_GAME마다 찍은 enter_ms (C_ENTER_GAME을 보낸 뒤 응답까지)
+    $enterMs = @(Select-String -Path (Join-Path $runDir 'bots.txt') -Pattern 'S_ENTER_GAME success=1 enter_ms=([\d.]+)' |
+        ForEach-Object { [double]$_.Matches[0].Groups[1].Value } | Sort-Object)
+
     Write-Host "  warmup $WarmupSec s (bots spread over the map) ..."
     Wait-Seconds $WarmupSec
     if ($server.HasExited) { throw 'GameServer exited during warmup' }
@@ -128,6 +160,13 @@ try
     $server.Refresh()
     $prevCpu    = $server.TotalProcessorTime
     $prevTime   = Get-Date
+
+    # 두 번째 무리: 측정 시작과 동시에 한꺼번에 (첫 무리가 이미 방에 있고, 주기 저장도 도는 중)
+    if ($Wave -gt 0)
+    {
+        $null = Start-TestProcess -Name 'bots-wave' -Exe 'DummyClient.exe' -Arguments $waveArgs
+        Write-Host "  wave: $Wave bots started$(if ($WaveReuse) { ' (same accounts as the first group)' })"
+    }
 
     Write-Host "  measuring $MeasureSec s ..."
     for ($sec = 1; $sec -le $MeasureSec; $sec++)
@@ -169,6 +208,22 @@ try
     $hitRows = @(Get-Content $serverLog | Select-Object -Skip $skipLines | ForEach-Object {
         if ($_ -match $hitPattern) { [pscustomobject]@{ Hits = [double]$Matches[1]; WorkMs = [double]$Matches[2] } }
     })
+
+    # 두 번째 무리가 측정 안에 다 못 들어왔으면 조금 더 기다림 (가입/로그인이 인원에 비례). 그래도 모자라면 아래 problems에 남음
+    #   [Room] 줄은 위에서 이미 읽어서, 이 기다림은 측정 값에 안 섞임 ([DB] 줄은 실행 전체를 보므로 들어감)
+    if ($Wave -gt 0)
+    {
+        $late = (Get-LogMatchCount -Name 'bots-wave' -Pattern 'S_ENTER_GAME success=1') -lt $Wave
+        if ($late -and -not $server.HasExited)
+        {
+            Wait-LogCount -Name 'bots-wave' -Pattern 'S_ENTER_GAME success=1' -Expected $Wave -TimeoutSec ([math]::Max(60, $Wave))
+            Wait-Seconds 11     # 마지막 입장들이 들어간 [DB] 10초 구간이 찍힐 때까지 (서버를 끄면 그 구간은 안 찍힘)
+        }
+        $waveEntered = Get-LogMatchCount -Name 'bots-wave' -Pattern 'S_ENTER_GAME success=1'
+        Write-Host "  wave entered: $waveEntered / $Wave"
+        $waveMs = @(Select-String -Path (Join-Path $runDir 'bots-wave.txt') -Pattern 'S_ENTER_GAME success=1 enter_ms=([\d.]+)' |
+            ForEach-Object { [double]$_.Matches[0].Groups[1].Value } | Sort-Object)
+    }
 }
 finally
 {
@@ -182,6 +237,49 @@ $samples | Export-Csv -Path (Join-Path $runDir 'process.csv') -NoTypeInformation
 function Get-Avg { param($Values) if ($null -eq $Values -or @($Values).Count -eq 0) { return 0 } return ($Values | Measure-Object -Average).Average }
 function Get-Max { param($Values) if ($null -eq $Values -or @($Values).Count -eq 0) { return 0 } return ($Values | Measure-Object -Maximum).Maximum }
 function Round2  { param([double]$Value) return [math]::Round($Value, 2) }
+
+# 백분위 (nearest-rank): 정렬된 값에서 p% 위치의 값. p99 = 100명을 빠른 순으로 세웠을 때 99번째 사람의 시간
+#   실제로 잰 값 중 하나를 고름 (두 값 사이를 보간하지 않음). 400명이면 p99 = 396번째, p100 = 가장 느린 사람
+function Get-Percentile
+{
+    param([double[]]$Sorted, [double]$P)
+    if ($Sorted.Count -eq 0) { return 0 }
+    $index = [math]::Ceiling($P / 100 * $Sorted.Count) - 1
+    return $Sorted[[math]::Max(0, $index)]
+}
+
+# [DB] 줄 전부 (실행 전체): 첫 무리의 로그인은 워밍업 전이고, [DB] 10초 구간은 측정 구간과 시작 시각이 달라서 자르지 않음
+#   서버를 강제로 끄므로 마지막 구간(정리할 때의 나감 저장)은 안 찍힘
+$serverLogPath = Join-Path $runDir 'server.txt'
+$dbRows = @()
+if (Test-Path $serverLogPath)
+{
+    $dbRows = @(Get-Content $serverLogPath | ForEach-Object {
+        if ($_ -match $dbPattern)
+        {
+            [pscustomobject]@{
+                LoadCount  = [double]$Matches[1];  LoadWaitAvg  = [double]$Matches[2];  LoadWaitMax  = [double]$Matches[3]
+                LoadRunAvg = [double]$Matches[4];  LoadRunMax   = [double]$Matches[5]
+                LeaveCount = [double]$Matches[6];  LeaveWaitAvg = [double]$Matches[7];  LeaveWaitMax = [double]$Matches[8]
+                LeaveRunAvg = [double]$Matches[9]; LeaveRunMax  = [double]$Matches[10]
+                SaveCount  = [double]$Matches[11]; SaveRows     = [double]$Matches[12]
+                SaveWaitAvg = [double]$Matches[13]; SaveWaitMax = [double]$Matches[14]
+                SaveRunAvg = [double]$Matches[15]; SaveRunMax   = [double]$Matches[16]
+            }
+        }
+    })
+}
+
+# 여러 10초 줄의 평균을 합침: 줄마다 "평균 x 건수"를 더해서 전체 건수로 나눔 (가중 평균. 건수가 많은 구간이 더 무겁게)
+function Get-WeightedAvg
+{
+    param($Rows, [string]$CountProp, [string]$AvgProp)
+    $total = ($Rows | ForEach-Object { $_.$CountProp } | Measure-Object -Sum).Sum
+    if (-not $total) { return 0 }
+    $weighted = ($Rows | ForEach-Object { $_.$CountProp * $_.$AvgProp } | Measure-Object -Sum).Sum
+    return $weighted / $total
+}
+function Get-Sum { param($Values) if ($null -eq $Values -or @($Values).Count -eq 0) { return 0 } return ($Values | Measure-Object -Sum).Sum }
 
 # [Room] 한 줄 = 200틱 구간. 틱이 밀리면 10초보다 길어지므로 실제 길이 = 200틱 x 그 줄의 평균 틱 간격
 #   (10초로 치면 틱이 321ms로 밀린 보스전 400명에서 초당 값이 6.4배 부풀려짐)
@@ -213,6 +311,29 @@ $result = [ordered]@{
     mem_mb_max           = Round2 (Get-Max $samples.working_set_mb)
     server_alive         = $alive
     run_dir              = $runName
+    # 새 열은 항상 여기(맨 끝)에만 추가 -> 아래 results.csv 머리줄 갱신이 옛 줄을 빈 칸으로 채움
+    enter_p50_ms         = Round2 (Get-Percentile $enterMs 50)
+    enter_p95_ms         = Round2 (Get-Percentile $enterMs 95)
+    enter_p99_ms         = Round2 (Get-Percentile $enterMs 99)
+    enter_max_ms         = Round2 (Get-Percentile $enterMs 100)
+    # DB 줄 (4단계): 상황 -> 두 번째 무리의 입장 지연 -> [DB] 통계 (실행 전체)
+    save_interval_s      = $saveIntervalUsed
+    wave_players         = $Wave
+    wave_reuse           = [bool]$WaveReuse
+    wave_entered         = $waveEntered
+    wave_enter_p50_ms    = Round2 (Get-Percentile $waveMs 50)
+    wave_enter_p95_ms    = Round2 (Get-Percentile $waveMs 95)
+    wave_enter_p99_ms    = Round2 (Get-Percentile $waveMs 99)
+    wave_enter_max_ms    = Round2 (Get-Percentile $waveMs 100)
+    db_load_count        = Get-Sum $dbRows.LoadCount
+    db_load_wait_avg_ms  = Round2 (Get-WeightedAvg $dbRows 'LoadCount' 'LoadWaitAvg')
+    db_load_wait_max_ms  = Round2 (Get-Max $dbRows.LoadWaitMax)
+    db_load_run_avg_ms   = Round2 (Get-WeightedAvg $dbRows 'LoadCount' 'LoadRunAvg')
+    db_leave_count       = Get-Sum $dbRows.LeaveCount
+    db_leave_run_avg_ms  = Round2 (Get-WeightedAvg $dbRows 'LeaveCount' 'LeaveRunAvg')
+    db_save_count        = Get-Sum $dbRows.SaveCount
+    db_save_rows         = Get-Sum $dbRows.SaveRows
+    db_save_run_max_ms   = Round2 (Get-Max $dbRows.SaveRunMax)
 }
 
 $summary = @("run $runName", '') + ($result.GetEnumerator() | ForEach-Object { '{0,-22} {1}' -f $_.Key, $_.Value })
@@ -230,6 +351,13 @@ $summary += "[Room] lines used ($($roomRows.Count), each = 200 ticks = 10 s at 5
 $summary += $roomRows | ForEach-Object {
     "  interval $($_.IntervalMs)ms, work avg $($_.WorkAvgMs)ms max $($_.WorkMaxMs)ms, players $($_.Players), monsters $($_.Monsters), sent $($_.Packets) packets $($_.KB) KB"
 }
+$summary += ''
+$summary += "[DB] lines used ($($dbRows.Count), whole run, 10 s each, only intervals with DB jobs):"
+$summary += $dbRows | ForEach-Object {
+    "  load $($_.LoadCount) (wait avg $($_.LoadWaitAvg) max $($_.LoadWaitMax), run avg $($_.LoadRunAvg) max $($_.LoadRunMax))" +
+    ", leave $($_.LeaveCount) (wait max $($_.LeaveWaitMax), run avg $($_.LeaveRunAvg))" +
+    ", save $($_.SaveCount) ($($_.SaveRows) rows, wait max $($_.SaveWaitMax), run max $($_.SaveRunMax)) ms"
+}
 $summary | Set-Content -Path (Join-Path $runDir 'summary.txt') -Encoding UTF8
 
 Write-Host ''
@@ -239,6 +367,8 @@ $problems = @()
 if ($entered -lt $Players) { $problems += "only $entered / $Players bots entered" }
 if (-not $alive)           { $problems += 'server exited' }
 if ($roomRows.Count -eq 0) { $problems += 'no [Room] stats line in the measure window' }
+if ($Wave -gt 0 -and $waveEntered -lt $Wave) { $problems += "only $waveEntered / $Wave wave bots entered" }
+if ($dbRows.Count -eq 0)   { $problems += 'no [DB] stats line in the server log' }
 foreach ($problem in $problems) { Write-Host "WARNING: $problem" -ForegroundColor Yellow }
 
 if ($NoRecord)
@@ -250,7 +380,22 @@ if ($NoRecord)
 $csvDir  = Join-Path $repoRoot 'Docs\LoadTest'
 $csvPath = Join-Path $csvDir 'results.csv'
 New-Item -ItemType Directory -Force $csvDir | Out-Null
-if (-not (Test-Path $csvPath)) { ($result.Keys -join ',') | Set-Content -Path $csvPath -Encoding ASCII }
+$header  = $result.Keys -join ','
+if (-not (Test-Path $csvPath)) { $header | Set-Content -Path $csvPath -Encoding ASCII }
+
+# 열이 늘었으면(새 열은 항상 맨 끝에만 추가) 머리줄을 바꾸고 옛 줄은 빈 칸으로 채움 -> 모든 줄의 열 수가 같게
+#   옛 줄은 그 값을 재지 않았으므로 비워 둠 (숫자를 만들어 넣지 않음)
+#   중간에 열을 끼워 넣으면 옛 숫자가 다른 열로 밀리므로 그때는 멈춤
+$lines = @(Get-Content $csvPath)
+if ($lines[0] -ne $header)
+{
+    if ($header.StartsWith($lines[0] + ',') -eq $false) { throw 'results.csv header does not match (new columns must be added at the end)' }
+    $pad   = ',' * ($result.Count - $lines[0].Split(',').Count)
+    $lines = @($header) + @($lines | Select-Object -Skip 1 | ForEach-Object { $_ + $pad })
+    $lines | Set-Content -Path $csvPath -Encoding ASCII
+    Write-Host "results.csv: added $($pad.Length) column(s) to the header, old rows left empty"
+}
+
 (($result.Values | ForEach-Object { "$_" }) -join ',') | Add-Content -Path $csvPath -Encoding ASCII
 
 Write-Host "Recorded: Docs\LoadTest\results.csv"

@@ -586,7 +586,7 @@ void Room::Leave(PlayerRef player)
 	// 방에 없었어도(Enter보다 Leave가 먼저 온 경우) 저장 + 접속 목록 정리는 반드시
 	//   안 보내면 DB 줄의 접속 목록에 계속 남아서 그 계정이 다시 못 들어옴
 	//   값은 지금 복사해서 넘김 (DB 줄은 이 복사본만 봄 -> Player를 같이 만지지 않음)
-	GDBQueue->DoAsync(&DBQueue::LeaveCharacter, player->ToCharacterData());
+	GDBRouter->RequestLeave(player->ToCharacterData());
 }
 
 void Room::SetSaveInterval(uint64 seconds)
@@ -620,7 +620,7 @@ void Room::SetLoadMonsters(int32 count, float area)
 }
 
 // 주기 저장: 전원의 지금 값을 복사해서 한 번에 넘김 (Room 줄은 DB를 기다리지 않음)
-//   Room은 한 줄이라 "주기 저장 복사 -> Leave 복사" 순서로 DB 줄에 들어감 -> 옛 값이 나중 값을 덮어쓰지 않음
+//   Room은 한 줄이라 "주기 저장 복사 -> Leave 복사" 순서로 그 계정의 DB 줄에 들어감 -> 옛 값이 나중 값을 덮어쓰지 않음
 void Room::SaveAllPlayers()
 {
 	if (_players.empty())
@@ -631,7 +631,7 @@ void Room::SaveAllPlayers()
 	for (auto& [id, player] : _players)
 		rows.push_back(player->ToCharacterData());
 
-	GDBQueue->DoAsync(&DBQueue::SaveCharacters, rows);
+	GDBRouter->RequestSave(std::move(rows));	// rows는 여기서 끝이라 복사 대신 move (입구가 계정별로 나눠서 줄마다)
 }
 
 void Room::HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 buttons, uint32 seq)
