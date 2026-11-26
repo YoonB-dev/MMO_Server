@@ -25,7 +25,7 @@
 //   60초마다  SaveAllPlayers (전원 값을 복사해서 DB 줄로. 틱은 DB를 기다리지 않음)
 //
 // 입장 / 퇴장
-//   DB 줄(LoadCharacter)이 캐릭터를 불러온 뒤 Enter -> S_ENTER_GAME, 시야 안의 객체를 S_SPAWN (나에게 주변, 상한이 남은 주변에게 나)
+//   DB 줄(LoadCharacter)이 캐릭터를 불러온 뒤 Enter (다음 틱이 가까우면 대기 목록 -> 틱 끝에 남는 시간만큼) -> S_ENTER_GAME, 시야 안의 객체를 S_SPAWN (나에게 주변, 상한이 남은 주변에게 나)
 //   끊기면 Leave -> 나를 보던 사람에게 S_DESPAWN + 값을 복사해서 DB 줄(LeaveCharacter)에 저장 요청
 //
 // 시야 (AOI)
@@ -142,9 +142,23 @@ void Room::SpawnMonster(MonsterSpawnData spawn)
 		<< " at (" << spawn.x << ", " << spawn.z << ")";
 }
 
+void Room::Span::Add(int64 us)
+{
+	const uint64 v = static_cast<uint64>((std::max)(us, int64(0)));
+	count++;
+	sumUs += v;
+	maxUs = (std::max)(maxUs, v);
+}
+
 void Room::Tick()
 {
 	_tick++;
+
+	// 틱 사이 간격 최댓값: 200틱 평균은 한 번 300ms 밀려도 51.6ms 정도로 묻힘
+	const int64 tickStartUs = NowUs();
+	if (_lastTickStartUs != 0)
+		_intervalMaxUs = (std::max)(_intervalMaxUs, static_cast<uint64>(tickStartUs - _lastTickStartUs));
+	_lastTickStartUs = tickStartUs;
 
 	// 게임 처리에 걸린 시간 측정 (GetTickCount64는 약 15ms 단위라 짧은 시간은 steady_clock으로)
 	const auto workStart = chrono::steady_clock::now();
@@ -175,6 +189,9 @@ void Room::Tick()
 	if (workUs > _workTimeMaxUs)
 		_workTimeMaxUs = workUs;
 
+	// 입장 대기 목록: work(틱 일)와 섞이지 않게 기록 다음에. 다음 틱 예약(now) 전에 해야 예약 시각이 이만큼 밀리지 않음
+	DrainPendingEnters();
+
 	const uint64 now = ::GetTickCount64();
 
 	if (_tick % TICK_LOG_INTERVAL == 0)
@@ -202,7 +219,34 @@ void Room::LogStats(uint64 now)
 		<< ", work avg " << workAvgMs << "ms max " << workMaxMs << "ms"
 		<< ", monster moves " << _monsterMovesSent << " (" << _monsterSendPolicy->Name() << ")"
 		<< ", players " << _players.size() << ", monsters " << _monsters.size()
-		<< ", sent " << _sentPackets << " packets " << (_sentBytes / 1024) << " KB";
+		<< ", sent " << _sentPackets << " packets " << (_sentBytes / 1024) << " KB"
+		<< ", interval max " << (_intervalMaxUs / 1000.0) << "ms";	// 맨 끝에 붙임 -> 앞부분 모양이 그대로라 Run-Load.ps1이 그대로 읽음
+
+	// 입장 구간: 이 10초에 입장(송신까지 끝난 것)이 하나라도 있었을 때만
+	if (_enterStats.total.count > 0)
+	{
+		auto avgMs = [](const Span& s) { return s.count > 0 ? s.sumUs / 1000.0 / s.count : 0.0; };
+		auto maxMs = [](const Span& s) { return s.maxUs / 1000.0; };
+		const EnterStats& e = _enterStats;
+		LogLine() << "[Room] enter " << e.total.count
+			<< " (db avg " << avgMs(e.db) << " max " << maxMs(e.db)
+			<< ", room wait avg " << avgMs(e.roomWait) << " max " << maxMs(e.roomWait)
+			<< ", run avg " << avgMs(e.run) << " max " << maxMs(e.run)
+			<< ", send wait avg " << avgMs(e.sendWait) << " max " << maxMs(e.sendWait)
+			<< ", total avg " << avgMs(e.total) << " max " << maxMs(e.total) << ") ms"
+			<< ", deferred " << _enterDeferred << ", queue max " << _enterQueueMax;	// 맨 끝 -> Run-Load.ps1 정규식은 그대로
+
+		// Enter 비용 쪼개기 (run = ①~⑤, ⑥ flush는 run 밖). 따로 줄을 둬서 위 줄의 정규식에 영향 없음
+		const double perEnter = static_cast<double>(e.total.count);
+		LogLine() << "[Room] enter cost " << e.total.count
+			<< " (enter pkt avg " << avgMs(e.enterPkt) << " max " << maxMs(e.enterPkt)
+			<< ", select avg " << avgMs(e.select) << " max " << maxMs(e.select)
+			<< ", notify avg " << avgMs(e.notify) << " max " << maxMs(e.notify)
+			<< ", objects avg " << avgMs(e.objects) << " max " << maxMs(e.objects)
+			<< ", spawn send avg " << avgMs(e.spawnSend) << " max " << maxMs(e.spawnSend)
+			<< ", flush avg " << avgMs(e.flush) << " max " << maxMs(e.flush) << ") ms"
+			<< ", notify " << (e.notifyOthers / perEnter) << " others per enter";
+	}
 
 	// 시야: 한 명이 지금 보고 있는 객체 수 (AOI 효과를 숫자로 보려고. 지금 순간의 값)
 	if (_players.empty() == false)
@@ -238,6 +282,10 @@ void Room::LogStats(uint64 now)
 	}
 
 	_logStartTime = now;
+	_enterStats = EnterStats{};
+	_enterDeferred = 0;
+	_enterQueueMax = 0;
+	_intervalMaxUs = 0;
 	_workTimeSumUs = 0;
 	_workTimeMaxUs = 0;
 	_monsterMovesSent = 0;
@@ -291,7 +339,6 @@ void Room::BroadcastToViewers(GameObject& object, SendBufferRef sendBuffer)
 //     바로 넣는 이유: 다음 틱까지 기다리면 입장 직후 50ms 동안 내 채팅 / 스킬 같은 이벤트가 주변에 안 감
 void Room::EnterView(const PlayerRef& player)
 {
-	const uint64 myId = player->GetObjectId();
 	const float x = player->GetPosInfo()->x();
 	const float z = player->GetPosInfo()->z();
 	const float enterSq = VIEW_ENTER_RADIUS * VIEW_ENTER_RADIUS;
@@ -299,16 +346,24 @@ void Room::EnterView(const PlayerRef& player)
 	Protocol::S_SPAWN aroundPkt;	// 나에게 보낼 주변 객체들
 	SendBufferRef mePkt;			// 주변에게 보낼 "나" (처음 필요할 때 한 번만 만들고 같은 버퍼를 여러 명에게)
 
+	// Enter 비용 ②~⑤: 구간 사이마다 시각 한 번 (NowUs 한 번이 수십 ns라 결과에 거의 영향 없음)
+	const int64 t0 = NowUs();
 	SelectVisiblePlayers(*player, x, z);	// 입장 직후라 전부 "새로 보임" -> 들어오는 반경 안에서 가까운 순으로 상한까지
 	for (const ViewCandidate& c : _viewCandidates)
 	{
-		player->visible.emplace(c.player->GetObjectId(), ViewEntry{ _tick, _tick });
+		player->AddVisible(*c.player, _tick);
 		*aroundPkt.add_objects() = c.player->GetObjectInfo();
 	}
+	const int64 t1 = NowUs();
 
 	_grid.ForEachPlayer(x, z, VIEW_ENTER_RADIUS, [&](const PlayerRef& other)
 		{
-			if (other == player || DistSq(*other, x, z) > enterSq || CountVisiblePlayers(*other) >= _maxVisiblePlayers)
+			if (other == player || DistSq(*other, x, z) > enterSq)
+				return;
+			// 반경 안인 사람만 셈 (조건 순서는 예전 한 줄짜리 ||와 같음 -> 계산하는 일은 그대로)
+			_enterStats.notifyOthers++;
+			other->CheckVisiblePlayerCount();	// Debug만: 숫자가 맞는지 다시 셈 (Release는 아무것도 안 함)
+			if (other->VisiblePlayerCount() >= _maxVisiblePlayers)	// 숫자 하나 읽기 (예전: 그 사람의 시야 목록 전체를 훑어서 셈)
 				return;
 
 			if (mePkt == nullptr)
@@ -317,16 +372,17 @@ void Room::EnterView(const PlayerRef& player)
 				*pkt.add_objects() = player->GetObjectInfo();
 				mePkt = ClientPacketHandler::MakeSendBuffer(pkt);
 			}
-			other->visible.emplace(myId, ViewEntry{ _tick, _tick });
+			other->AddVisible(*player, _tick);
 			SendTo(other, mePkt);
 		});
+	const int64 t2 = NowUs();
 
 	_grid.ForEachMonster(x, z, VIEW_ENTER_RADIUS, [&](const MonsterRef& monster)
 		{
 			if (DistSq(*monster, x, z) > enterSq)
 				return;
 
-			player->visible.emplace(monster->GetObjectId(), ViewEntry{ _tick, _tick });
+			player->AddVisible(*monster, _tick);
 			*aroundPkt.add_objects() = monster->GetObjectInfo();
 		});
 
@@ -335,12 +391,19 @@ void Room::EnterView(const PlayerRef& player)
 			if (DistSq(*drop, x, z) > enterSq)
 				return;
 
-			player->visible.emplace(drop->GetObjectId(), ViewEntry{ _tick, _tick });
+			player->AddVisible(*drop, _tick);
 			*aroundPkt.add_objects() = drop->GetObjectInfo();
 		});
+	const int64 t3 = NowUs();
 
 	if (aroundPkt.objects_size() > 0)
 		SendSpawns(player, aroundPkt);
+	const int64 t4 = NowUs();
+
+	_enterStats.select.Add(t1 - t0);
+	_enterStats.notify.Add(t2 - t1);
+	_enterStats.objects.Add(t3 - t2);
+	_enterStats.spawnSend.Add(t4 - t3);
 }
 
 // 보일 다른 플레이어를 _viewCandidates에 모음
@@ -385,19 +448,6 @@ void Room::SelectVisiblePlayers(Player& viewer, float x, float z)
 	_viewCandidates.resize(_maxVisiblePlayers);	// 뒤쪽(우선순위 낮은 사람)은 이번 틱에 확인 안 됨 -> 이미 보이던 사람이면 S_DESPAWN
 }
 
-// 이 사람이 지금 보고 있는 다른 플레이어 수 (visible에는 몬스터, 드랍도 섞여 있어서 _players에 있는 id만 셈)
-//   입장(EnterView)에서만 씀 -> 드물어서 매번 세어도 비용이 작음 (따로 개수를 들고 다니면 넣고 빼는 곳마다 맞춰야 함)
-int32 Room::CountVisiblePlayers(Player& viewer)
-{
-	int32 count = 0;
-	for (auto& [id, entry] : viewer.visible)
-	{
-		if (_players.count(id) > 0)
-			count++;
-	}
-	return count;
-}
-
 // 다른 플레이어를 보여 줄 우선순위 점수 (작을수록 먼저). 상한이 꽉 차면 점수가 작은 사람이 큰 사람 자리를 뺏음
 //   ① 작은 시야 안:                거리 - 끈적임(보이던 사람) / 거리(새 사람)
 //   ② 작은 시야 밖, 보이던 사람:   VIEW_TIER_STEP + 거리      -> 밖에서 새로 온 사람에게는 안 밀림 (①이 밀어낼 때는 먼 사람부터)
@@ -436,7 +486,7 @@ void Room::ShowInView(Player& viewer, GameObject& other, float distSq, Protocol:
 	auto it = viewer.visible.find(other.GetObjectId());
 	if (it == viewer.visible.end())
 	{
-		viewer.visible.emplace(other.GetObjectId(), ViewEntry{ _tick, _tick });
+		viewer.AddVisible(other, _tick);
 		*spawnPkt.add_objects() = other.GetObjectInfo();
 		return;
 	}
@@ -505,7 +555,7 @@ void Room::UpdateView(const PlayerRef& player, const Protocol::S_MOVE& tickMoves
 		if (it->second.seenTick != _tick)
 		{
 			despawnPkt.add_object_ids(it->first);
-			it = player->visible.erase(it);
+			it = player->EraseVisible(it);
 		}
 		else
 		{
@@ -524,13 +574,46 @@ void Room::UpdateView(const PlayerRef& player, const Protocol::S_MOVE& tickMoves
 		SendMoves(player, movePkt);
 }
 
+// DB 줄 -> Room 줄 입구. 다음 틱까지 여유가 있고 기다리는 사람이 없으면 바로 (한가할 때는 예전과 같음)
+//   여유가 없으면(다음 틱이 5ms 안) 대기 목록 뒤에 섬 -> 틱 끝 DrainPendingEnters가 남는 시간만큼 처리
+//   기다리는 사람이 있으면 여유가 있어도 뒤에 섬 -> 들어온 순서 유지
+//   대기 중인 사람은 아직 _players에 없음 -> Handle* 핸들러가 전부 _players를 먼저 봐서 그 사람의 요청은 무시됨
 void Room::Enter(PlayerRef player)
+{
+	if (_pendingEnters.empty() && NowUs() < _lastTickStartUs + ENTER_DEADLINE_US)
+	{
+		ProcessEnter(player);
+		return;
+	}
+
+	_pendingEnters.push_back(std::move(player));
+	_enterDeferred++;
+	_enterQueueMax = (std::max)(_enterQueueMax, static_cast<uint64>(_pendingEnters.size()));
+}
+
+// Tick 끝 (work 기록 다음, 다음 틱 예약 전): 다음 틱 5ms 전까지 앞에서부터 입장
+//   done == 0 조건: 틱 일만으로 예산을 넘긴 틱에도 최소 1명은 진행 (입장이 멈추지 않게)
+void Room::DrainPendingEnters()
+{
+	int32 done = 0;
+	while (_pendingEnters.empty() == false && (done == 0 || NowUs() < _lastTickStartUs + ENTER_DEADLINE_US))
+	{
+		PlayerRef player = std::move(_pendingEnters.front());	// 복사 대신 꺼내 옴 (참조 카운트를 올렸다 내리지 않음)
+		_pendingEnters.pop_front();
+		ProcessEnter(player);
+		done++;
+	}
+}
+
+void Room::ProcessEnter(PlayerRef player)
 {
 	// DB 큐가 SetPlayer한 뒤 바로 끊기면, Leave가 이 Enter보다 먼저 줄에 들어갈 수 있음
 	//   그 경우 세션은 이미 연결 끊김 표시라 여기서 막음 (안 막으면 아무도 내보내지 않는 유령 플레이어가 남음)
 	GameSessionRef session = player->GetSession();
 	if (session == nullptr || session->IsConnected() == false)
 		return;
+
+	const int64 startUs = NowUs();	// 입장 구간: DB 줄이 넘긴 뒤 이 줄에서 기다린 시간 + 이 함수의 처리 시간
 
 	const uint64 myId = player->GetObjectId();
 	_players[myId] = player;
@@ -558,9 +641,26 @@ void Room::Enter(PlayerRef player)
 		}
 		SendTo(player, ClientPacketHandler::MakeSendBuffer(pkt));
 	}
+	_enterStats.enterPkt.Add(NowUs() - startUs);	// Enter 비용 ①
 
-	// 2. 시야: 주변을 나에게, 나를 주변에게 (방 전체가 아니라 들어오는 반경 안만)
+	// 2. 시야: 주변을 나에게, 나를 주변에게 (방 전체가 아니라 들어오는 반경 안만). 안에서 ②~⑤를 잼
 	EnterView(player);
+
+	// 3. 입장 응답은 틱 끝을 기다리지 않고 바로 보냄 (내 큐에 쌓인 S_ENTER_GAME + 주변 S_SPAWN을 WSASend 한 번)
+	//   틱 끝 몰아 보내기는 매 틱 생기는 이동 패킷용. 입장은 사람마다 한 번이라 기다린 만큼 입장 지연만 늘어남
+	//   (기준선: 빈 서버 85ms 중 47ms, 몰렸을 때 303ms 중 122ms가 이 대기)
+	//   주변 사람에게 가는 "나"의 S_SPAWN은 그대로 틱 끝에 감 (그 사람들의 이동 패킷과 같이 한 번에)
+	//   틱 끝 FlushSends가 이 세션을 한 번 더 불러도 괜찮음: 큐가 비었거나 보내는 중이면 FlushSend가 아무것도 안 함
+	const int64 doneUs = NowUs();
+	session->FlushSend();
+	_enterStats.flush.Add(NowUs() - doneUs);	// Enter 비용 ⑥ (run에는 안 들어감 -> run은 기준선과 같은 범위)
+
+	// 입장 구간 기록 (송신 대기는 이제 0. 같은 줄 모양을 유지해서 기준선과 바로 비교)
+	_enterStats.db.Add(session->enterLoadedUs - session->enterRecvUs);
+	_enterStats.roomWait.Add(startUs - session->enterLoadedUs);
+	_enterStats.run.Add(doneUs - startUs);
+	_enterStats.sendWait.Add(0);
+	_enterStats.total.Add(doneUs - session->enterRecvUs);
 }
 
 void Room::Leave(PlayerRef player)
@@ -576,7 +676,7 @@ void Room::Leave(PlayerRef player)
 			{
 				if (viewer == player)
 					return;		// 나가는 본인은 제외
-				viewer->visible.erase(id);
+				viewer->EraseVisible(id);
 				SendTo(viewer, sendBuffer);
 			});
 
@@ -1126,7 +1226,7 @@ void Room::KillMonster(MonsterRef monster, uint64 killerId)
 	SendBufferRef sendBuffer = ClientPacketHandler::MakeSendBuffer(pkt);
 	ForEachViewer(*monster, [&](const PlayerRef& viewer)
 		{
-			viewer->visible.erase(monsterId);
+			viewer->EraseVisible(monsterId);
 			SendTo(viewer, sendBuffer);
 		});
 
@@ -1246,7 +1346,7 @@ void Room::RemoveDrop(DropRef drop, uint64 pickerId)
 	}
 	ForEachViewer(*drop, [&](const PlayerRef& viewer)
 		{
-			viewer->visible.erase(id);
+			viewer->EraseVisible(id);
 			SendTo(viewer, sendBuffer);
 		});
 	_grid.Remove(drop);	// ForEachViewer가 끝난 뒤에 (도는 중에 칸 목록을 바꾸면 안 됨)
@@ -1536,7 +1636,7 @@ void Room::SendSpawns(const PlayerRef& player, const Protocol::S_SPAWN& all)
 // 방에서 나가는 패킷은 전부 여기를 지남 -> 송신량 통계도 여기서 셈
 //   Room 잡큐 안에서만 불리므로(한 번에 한 스레드) 카운터는 atomic이 아니어도 됨
 //   큐에 넣기만 하고(PushSend) 실제 WSASend는 틱 끝 FlushSends에서 세션마다 한 번
-//     -> 한 틱에 같은 사람에게 패킷이 여러 개 가도 시스템 호출은 한 번 (틱 밖에서 생긴 패킷은 최대 한 틱 늦게 감)
+//     -> 한 틱에 같은 사람에게 패킷이 여러 개 가도 시스템 호출은 한 번 (틱 밖에서 생긴 패킷은 최대 한 틱 늦게 감. 입장 응답은 예외: Room::Enter가 바로 FlushSend)
 void Room::SendTo(PlayerRef player, SendBufferRef sendBuffer)
 {
 	if (GameSessionRef session = player->GetSession())

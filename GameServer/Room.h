@@ -106,7 +106,7 @@ public:
 	void	SetMaxDrops(int32 count);					// 바닥 드랍 상한 (Start 전에 main에서 한 번, 0 이하면 기본 500 그대로)
 	void	SetMaxVisiblePlayers(int32 count);			// 보이는 다른 플레이어 상한 (Start 전에 main에서 한 번, 0 이하면 기본 50 그대로)
 	void	Start();				// 첫 틱 예약 (main에서 한 번)
-	void	Enter(PlayerRef player);
+	void	Enter(PlayerRef player);	// DB 줄이 부르는 입구: 다음 틱까지 여유가 있으면 바로, 아니면 입장 대기 목록에
 	void	Leave(PlayerRef player);	// 방에서 빼기 + 저장 요청 (저장할 값을 꺼내야 해서 id가 아니라 Player)
 	void	HandleMoveInput(PlayerRef player, float dirX, float dirZ, uint32 buttons, uint32 seq);
 	void	HandleSkill(PlayerRef player, int32 skillId, uint64 targetId);
@@ -157,8 +157,9 @@ private:
 	static void	CountTargetFail(TargetFailStats& stats, TargetCheck result);
 	void	UpdateViews(const Protocol::S_MOVE& tickMoves);						// 매 틱 끝: 플레이어마다 UpdateView
 	void	UpdateView(const PlayerRef& player, const Protocol::S_MOVE& tickMoves);	// 시야 다시 계산 -> S_DESPAWN, S_SPAWN, S_MOVE를 이 사람에게
+	void	ProcessEnter(PlayerRef player);									// 실제 입장: S_ENTER_GAME + EnterView + 바로 송신 + 입장 구간 기록
+	void	DrainPendingEnters();											// 틱 끝: 입장 대기 목록을 다음 틱 전(ENTER_DEADLINE_US)까지 처리
 	void	EnterView(const PlayerRef& player);								// 입장 즉시: 주변을 나에게, 나를 주변에게 (그 사람의 상한이 남았을 때)
-	int32	CountVisiblePlayers(Player& viewer);							// 지금 보고 있는 다른 플레이어 수 (입장 때만)
 	void	SelectVisiblePlayers(Player& viewer, float x, float z);			// 보일 다른 플레이어를 _viewCandidates에 (상한이면 우선순위 순으로 자름)
 	float	ViewPriority(Player& viewer, Player& other, float distSq, bool wasVisible);	// 작을수록 먼저 보임 (확장: 파티원, 공격 대상 등)
 	uint64	MoveIntervalFor(GameObject& object, float distSq);				// 거리별 이동 전송 간격 (틱). 확장: 객체 종류별 (보스는 매 틱 등)
@@ -196,7 +197,46 @@ private:
 	float	_loadMonsterArea = 0.f;
 	int32	_loadBossType = 0;		// --load-boss <monster_id>. 0이면 없음
 
+	// 시간 한 종류의 10초 통계 (Room 줄 안에서만 -> 락 없음)
+	struct Span
+	{
+		uint64	count = 0;
+		uint64	sumUs = 0;
+		uint64	maxUs = 0;
+		void	Add(int64 us);		// 음수는 0으로 (DBQueue::JobStats::Add와 같음)
+	};
+	// 입장 구간 다섯 조각: C_ENTER_GAME 받음 -(db)-> 불러옴 -(roomWait)-> Enter 시작 -(run)-> Enter 끝 -(sendWait)-> 송신
+	//   total = 받음 ~ 송신 (서버 안에서 쓴 시간 전부). 클라의 enter_ms - total = 네트워크 + 클라 처리
+	//   sendWait는 입장 응답을 틱 끝에 보내던 때(190d2fe까지)의 값. 지금은 Enter가 바로 보내서 0 (줄 모양은 비교용으로 유지)
+	struct EnterStats
+	{
+		Span	db;
+		Span	roomWait;
+		Span	run;
+		Span	sendWait;
+		Span	total;
+		// Enter 안 (run을 쪼갬) + 바로 송신: ProcessEnter / EnterView에서. [Room] enter cost 줄
+		Span	enterPkt;		// ① _players, Grid에 넣기 + S_ENTER_GAME 만들기
+		Span	select;			// ② SelectVisiblePlayers + 고른 사람을 aroundPkt에
+		Span	notify;			// ③ 주변 플레이어에게 나 알리기 (보이는 플레이어 수는 Player::VisiblePlayerCount로 읽기만)
+		Span	objects;		// ④ 몬스터, 드랍
+		Span	spawnSend;		// ⑤ SendSpawns (나눠 담기 + 직렬화)
+		Span	flush;			// ⑥ FlushSend (WSASend). run에는 안 들어감
+		uint64	notifyOthers = 0;	// ③에서 확인한 주변 플레이어 수 (합)
+	};
+
+	// 입장은 틱 시작부터 이 시각까지만 (다음 틱 5ms 전). 400명이 몰려도 Enter들이 다음 틱을 밀지 않게
+	//   (입장 구간 측정: Enter 400개가 Room 줄을 약 350ms 잡아 틱이 250ms 밀렸음)
+	//   45'000: '는 숫자 구분자 (C++14, 값은 45000)
+	static constexpr int64	ENTER_DEADLINE_US = 45'000;
+	xdeque<PlayerRef>	_pendingEnters;		// 입장 대기 (들어온 순서. 뒤에 넣고 앞에서 빼서 deque)
+
 	// 10초(200틱) 통계 -> LogStats에서 출력 후 0으로
+	EnterStats	_enterStats;			// ProcessEnter가 다섯 조각 모두 기록 (입장 응답을 바로 보내서 sendWait는 0, roomWait에 대기 목록 시간 포함)
+	uint64	_enterDeferred = 0;		// 대기 목록으로 간 입장 수
+	uint64	_enterQueueMax = 0;		// 대기 목록이 가장 길었을 때
+	int64	_lastTickStartUs = 0;	// 지난 틱 시작 시각 (NowUs) -> 틱 사이 간격 (0이면 첫 틱)
+	uint64	_intervalMaxUs = 0;		// 가장 길었던 틱 간격 (평균에 묻히는 한 번의 큰 밀림을 보려고)
 	uint64	_workTimeSumUs = 0;		// 틱 처리 시간 합 (마이크로초)
 	uint64	_workTimeMaxUs = 0;		// 가장 오래 걸린 틱
 	uint64	_monsterMovesSent = 0;	// S_MOVE에 넣은 몬스터 항목 수

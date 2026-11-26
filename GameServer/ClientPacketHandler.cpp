@@ -41,6 +41,7 @@ bool Handle_C_ENTER_GAME(PacketSessionRef& session, Protocol::C_ENTER_GAME& pkt)
 		session->Send(ClientPacketHandler::MakeSendBuffer(fail));
 		return true;
 	}
+	gameSession->enterRecvUs = NowUs();	// 입장 구간 시작 (Room::Enter가 입장 응답을 보낼 때까지 -> [Room] enter 통계)
 
 	// 아웃게임 서버가 발급한 Access Token(JWT) 검증. HMAC 계산 한 번이라 이 IOCP 스레드에서 바로 함 (DB 안 씀)
 	const JwtVerifier::Result auth = GJwtVerifier.Verify(pkt.access_token());

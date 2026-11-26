@@ -16,12 +16,6 @@ shared_ptr<DBRouter> GDBRouter;
 //   중복   LoadCharacter  -> _online에 있음  -> 옛 세션 Disconnect, 새 세션은 _waiting -> 옛 세션의 LeaveCharacter가 이어 줌
 //   주기   Room::SaveAllPlayers -> SaveCharacters -> 50명씩 SaveBatch (트랜잭션 하나에 여러 명)
 
-// steady_clock: 시계 맞춤으로 되돌아가지 않는 시계 (구간 재기용). int64: DoAsync에 넘기는 requestUs와 타입이 정확히 같아야 함
-static int64 NowUs()
-{
-	return chrono::duration_cast<chrono::microseconds>(chrono::steady_clock::now().time_since_epoch()).count();
-}
-
 void DBQueue::JobStats::Add(int64 waitUs, int64 runUs)
 {
 	const uint64 wait = static_cast<uint64>((std::max)(waitUs, int64(0)));	// steady_clock이라 음수는 안 나오지만 혹시 몰라 0으로
@@ -198,6 +192,7 @@ void DBQueue::LoadCharacter(GameSessionRef session, int64 accountId, int64 chara
 	_online[accountId] = session;
 
 	LogLine() << "[DB] loaded character: account " << accountId << ", character " << characterId;	// 닉네임은 안 찍음 (콘솔 한글)
+	session->enterLoadedUs = NowUs();		// 입장 구간: 여기까지가 db, 여기부터 Room 줄 대기 (DoAsync 전에 써야 Room 줄이 이 값을 봄)
 	GRoom->DoAsync(&Room::Enter, player);	// 입장 처리는 Room 줄에서 (세션이 아직 연결돼 있는지 한 번 더 봄)
 }
 

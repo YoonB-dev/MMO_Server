@@ -118,6 +118,11 @@ $num = '([\d.e+-]+)'
 $dbJob = "\(wait avg ${num}ms max ${num}ms, run avg ${num}ms max ${num}ms\)"
 $dbPattern = "\[DB\] load (\d+) $dbJob, leave (\d+) $dbJob, save (\d+) \((\d+) rows, wait avg ${num}ms max ${num}ms, run avg ${num}ms max ${num}ms\)"
 
+# 서버 [Room] enter 10초 통계 한 줄 (Room::LogStats, 그 10초에 입장이 있을 때만): 입장 구간 다섯 조각 (ms)
+#   db: 받음 -> 불러오기 끝, room wait: Room 줄에서 기다림, run: Room::Enter, send wait: 틱 끝 송신까지, total: 받음 -> 송신
+$enterPattern = "\[Room\] enter (\d+) \(db avg ${num} max ${num}, room wait avg ${num} max ${num}, run avg ${num} max ${num}" +
+                ", send wait avg ${num} max ${num}, total avg ${num} max ${num}\) ms"
+
 $samples   = New-Object System.Collections.Generic.List[object]
 $roomRows  = @()
 $hitRows   = @()
@@ -194,7 +199,7 @@ try
     $roomRows = @(Get-Content $serverLog | Select-Object -Skip $skipLines | ForEach-Object {
         if ($_ -match $roomPattern)
         {
-            [pscustomobject]@{
+            $row = [pscustomobject]@{
                 IntervalMs = [double]$Matches[2]
                 WorkAvgMs  = [double]$Matches[3]
                 WorkMaxMs  = [double]$Matches[4]
@@ -202,7 +207,12 @@ try
                 Monsters   = [int]$Matches[7]
                 Packets    = [double]$Matches[8]
                 KB         = [double]$Matches[9]
+                IntervalPeakMs = 0
             }
+            # 틱 하나의 가장 긴 간격 (줄 끝, 예전 로그에는 없음 -> 0)
+            #   두 번째 -match가 $Matches를 덮어쓰므로 위에서 값을 다 꺼낸 다음에
+            if ($_ -match 'interval max ([\d.e+-]+)ms') { $row.IntervalPeakMs = [double]$Matches[1] }
+            $row
         }
     })
     $hitRows = @(Get-Content $serverLog | Select-Object -Skip $skipLines | ForEach-Object {
@@ -270,6 +280,29 @@ if (Test-Path $serverLogPath)
     })
 }
 
+# [Room] enter 줄: 측정 시작 때의 로그 줄 수($skipLines) 앞 = 첫 무리, 뒤 = 두 번째 무리 (측정 중에는 다른 입장이 없음)
+#   두 번째 무리는 위에서 더 기다린 시간까지 들어감 ([DB] 줄과 같음)
+$enterFirst = @()
+$enterWave = @()
+if (Test-Path $serverLogPath)
+{
+    $lineNo = 0
+    foreach ($line in Get-Content $serverLogPath)
+    {
+        $lineNo++
+        if ($line -notmatch $enterPattern) { continue }
+        $row = [pscustomobject]@{
+            Count       = [double]$Matches[1]
+            DbAvg       = [double]$Matches[2];  DbMax       = [double]$Matches[3]
+            RoomWaitAvg = [double]$Matches[4];  RoomWaitMax = [double]$Matches[5]
+            RunAvg      = [double]$Matches[6];  RunMax      = [double]$Matches[7]
+            SendWaitAvg = [double]$Matches[8];  SendWaitMax = [double]$Matches[9]
+            TotalAvg    = [double]$Matches[10]; TotalMax    = [double]$Matches[11]
+        }
+        if ($lineNo -le $skipLines) { $enterFirst += $row } else { $enterWave += $row }
+    }
+}
+
 # 여러 10초 줄의 평균을 합침: 줄마다 "평균 x 건수"를 더해서 전체 건수로 나눔 (가중 평균. 건수가 많은 구간이 더 무겁게)
 function Get-WeightedAvg
 {
@@ -334,6 +367,24 @@ $result = [ordered]@{
     db_save_count        = Get-Sum $dbRows.SaveCount
     db_save_rows         = Get-Sum $dbRows.SaveRows
     db_save_run_max_ms   = Round2 (Get-Max $dbRows.SaveRunMax)
+    # 서버 안 입장 구간 ([Room] enter 줄): 틱 하나의 최대 간격 -> 첫 무리 8개 -> 두 번째 무리 8개
+    tick_interval_peak_ms  = Round2 (Get-Max $roomRows.IntervalPeakMs)
+    enter_server_avg_ms    = Round2 (Get-WeightedAvg $enterFirst 'Count' 'TotalAvg')
+    enter_server_max_ms    = Round2 (Get-Max $enterFirst.TotalMax)
+    enter_db_avg_ms        = Round2 (Get-WeightedAvg $enterFirst 'Count' 'DbAvg')
+    enter_room_wait_avg_ms = Round2 (Get-WeightedAvg $enterFirst 'Count' 'RoomWaitAvg')
+    enter_room_wait_max_ms = Round2 (Get-Max $enterFirst.RoomWaitMax)
+    enter_run_avg_ms       = Round2 (Get-WeightedAvg $enterFirst 'Count' 'RunAvg')
+    enter_send_wait_avg_ms = Round2 (Get-WeightedAvg $enterFirst 'Count' 'SendWaitAvg')
+    enter_send_wait_max_ms = Round2 (Get-Max $enterFirst.SendWaitMax)
+    wave_server_avg_ms     = Round2 (Get-WeightedAvg $enterWave 'Count' 'TotalAvg')
+    wave_server_max_ms     = Round2 (Get-Max $enterWave.TotalMax)
+    wave_db_avg_ms         = Round2 (Get-WeightedAvg $enterWave 'Count' 'DbAvg')
+    wave_room_wait_avg_ms  = Round2 (Get-WeightedAvg $enterWave 'Count' 'RoomWaitAvg')
+    wave_room_wait_max_ms  = Round2 (Get-Max $enterWave.RoomWaitMax)
+    wave_run_avg_ms        = Round2 (Get-WeightedAvg $enterWave 'Count' 'RunAvg')
+    wave_send_wait_avg_ms  = Round2 (Get-WeightedAvg $enterWave 'Count' 'SendWaitAvg')
+    wave_send_wait_max_ms  = Round2 (Get-Max $enterWave.SendWaitMax)
 }
 
 $summary = @("run $runName", '') + ($result.GetEnumerator() | ForEach-Object { '{0,-22} {1}' -f $_.Key, $_.Value })
@@ -358,6 +409,16 @@ $summary += $dbRows | ForEach-Object {
     ", leave $($_.LeaveCount) (wait max $($_.LeaveWaitMax), run avg $($_.LeaveRunAvg))" +
     ", save $($_.SaveCount) ($($_.SaveRows) rows, wait max $($_.SaveWaitMax), run max $($_.SaveRunMax)) ms"
 }
+$summary += ''
+$summary += "[Room] enter lines used (10 s each, only intervals with entries; first group = before the measure window, wave = after):"
+$enterLine = {
+    param($Group, $Row)
+    "  $Group $($Row.Count) (db avg $($Row.DbAvg) max $($Row.DbMax), room wait avg $($Row.RoomWaitAvg) max $($Row.RoomWaitMax)" +
+    ", run avg $($Row.RunAvg) max $($Row.RunMax), send wait avg $($Row.SendWaitAvg) max $($Row.SendWaitMax)" +
+    ", total avg $($Row.TotalAvg) max $($Row.TotalMax)) ms"
+}
+$summary += $enterFirst | ForEach-Object { & $enterLine 'first' $_ }
+$summary += $enterWave | ForEach-Object { & $enterLine 'wave ' $_ }
 $summary | Set-Content -Path (Join-Path $runDir 'summary.txt') -Encoding UTF8
 
 Write-Host ''

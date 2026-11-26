@@ -26,6 +26,12 @@ public:
 	// Room이 이번 틱에 이 세션에 PushSend했는지 (Room::_pendingFlush에 한 번만 넣으려고). Room 잡큐에서만 만짐 -> 락 없음
 	bool		flushPending = false;
 
+	// 입장 구간 시각 (NowUs, 0 = 없음). 단계마다 쓰는 스레드가 다르지만
+	//   앞 단계가 다 쓴 뒤 DoAsync로 넘기고, 다음 단계는 그 일 안에서 읽음 -> 동시에 만지는 순간이 없어서 락 없음
+	//   (DoAsync가 넣고 꺼낼 때 JobQueue의 락을 지나므로, 넣기 전에 쓴 값은 꺼낸 쪽에서 반드시 보임)
+	int64		enterRecvUs = 0;	// 핸들러가 C_ENTER_GAME을 받음 (IOCP 스레드)
+	int64		enterLoadedUs = 0;	// DB 줄이 불러오기를 끝내고 Room에 넘김 (DB 줄). Room::Enter가 둘을 읽어서 기록
+
 private:
 	Lock			_playerLock;		// _player, _closed 보호 (ServerCore의 Lock: 데드락 탐지 포함)
 	PlayerRef		_player;			// 입장 전에는 nullptr
