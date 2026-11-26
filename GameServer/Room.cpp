@@ -54,9 +54,13 @@ void Room::SetMonsterSendPolicy(const MoveSendPolicy* policy)
 	LogLine() << "[Room] monster send policy: " << policy->Name();
 }
 
+static double MeasureCyclesPerUs();	// 아래 틱 측정 함수들 옆에 정의 (Start가 먼저 나와서 이름만 먼저 알림)
+
 void Room::Start()
 {
 	SpawnMonsters();	// 서버가 열리기 전(main 스레드만 실행 중)이라 바로 호출해도 안전
+	_cyclesPerUs = MeasureCyclesPerUs();	// 워커가 뜨기 전에 한 번 -> 그 뒤로 Room 줄에서 읽기만 (락 없음)
+	LogLine() << "[Room] cpu cycles per us " << _cyclesPerUs << " (busy loop 20ms, base for cpu busy %)";
 
 	const uint64 now = ::GetTickCount64();
 	_nextTickTime = now + TICK_INTERVAL_MS;
@@ -162,7 +166,30 @@ static int64 ThreadCpuUs()
 	return (to64(kernel) + to64(user)) / 10;	// 100ns -> us
 }
 
-void Room::RecordTickCost(int64 workUs, const int64 (&partUs)[7], const int64 (&partLockUs)[7], int64 cpuUs, uint32 cpuStart, uint32 cpuEnd, uint64 viewChanges)
+// 이 스레드가 지금까지 CPU 위에서 돈 사이클 수 (커널 + 사용자)
+//   GetThreadTimes와 달리 15.6ms 단위가 아니라 사이클 단위로 정확함. OS가 스레드를 밀어낸 동안은 안 셈
+//   Microsoft 문서: 이 값을 시간으로 바꾸지 말 것 -> 시간이 아니라 MeasureCyclesPerUs와 비교한 비율로만 씀
+static uint64 ThreadCycles()
+{
+	ULONG64 cycles = 0;
+	::QueryThreadCycleTime(::GetCurrentThread(), &cycles);
+	return cycles;
+}
+
+// 기준값: 20ms 동안 쉬지 않고 돌면서 1µs에 몇 사이클이 세지는지 (Start에서 한 번)
+//   나중에 "쓴 사이클 / (걸린 시간 x 이 값)"이 100%에 가까우면 그동안 CPU에서 계속 일함, 낮으면 밀려났거나 커널에서 기다림
+static double MeasureCyclesPerUs()
+{
+	const uint64 startCycles = ThreadCycles();
+	const int64 startUs = NowUs();
+	int64 nowUs = startUs;
+	while (nowUs - startUs < 20'000)
+		nowUs = NowUs();
+	return static_cast<double>(ThreadCycles() - startCycles) / static_cast<double>(nowUs - startUs);
+}
+
+void Room::RecordTickCost(int64 workUs, const int64 (&partUs)[7], const int64 (&partLockUs)[7], int64 cpuUs, uint32 cpuStart, uint32 cpuEnd, uint64 viewChanges,
+	uint64 tickCycles, uint64 flushCycles, const FlushStats& flush)
 {
 	for (int32 i = 0; i < TICK_PART_COUNT; i++)
 	{
@@ -184,6 +211,9 @@ void Room::RecordTickCost(int64 workUs, const int64 (&partUs)[7], const int64 (&
 	_slowTick.cpuStart = cpuStart;
 	_slowTick.cpuEnd = cpuEnd;
 	_slowTick.viewChanges = viewChanges;
+	_slowTick.tickCycles = tickCycles;
+	_slowTick.flushCycles = flushCycles;
+	_slowTick.flush = flush;
 }
 
 void Room::Tick()
@@ -201,6 +231,7 @@ void Room::Tick()
 
 	// 틱 조각 측정: 조각 사이마다 시각 한 번 + 스레드 CPU 시간 / CPU 번호 / 시야 변화 수 (측정만, 동작은 그대로)
 	const int64 cpuStartUs = ThreadCpuUs();
+	const uint64 tickStartCycles = ThreadCycles();
 	const uint32 cpuStart = ::GetCurrentProcessorNumber();
 	const uint64 viewBefore = _viewSpawned + _viewDespawned;
 	int64 part[TICK_PART_COUNT] = {};
@@ -242,7 +273,10 @@ void Room::Tick()
 	mark(4);	// views
 	FlushHpChanges();	// 시야 다음: 이번 틱에 새로 보인 사람은 S_SPAWN에 지금 HP가 이미 실려 있음
 	mark(5);	// hp
-	FlushSends();		// 맨 끝: 이번 틱(과 지난 틱 이후 잡)에서 쌓인 패킷을 세션마다 WSASend 한 번
+	const uint64 flushStartCycles = ThreadCycles();
+	FlushStats flushStats;	// 틱 안의 지역 변수 (Room 줄 안이라 락 없음). FlushSends가 참조로 받아 채움
+	FlushSends(flushStats);		// 맨 끝: 이번 틱(과 지난 틱 이후 잡)에서 쌓인 패킷을 세션마다 WSASend 한 번
+	const uint64 flushCycles = ThreadCycles() - flushStartCycles;
 	mark(6);	// flush
 
 	const uint64 workUs = chrono::duration_cast<chrono::microseconds>(chrono::steady_clock::now() - workStart).count();
@@ -250,7 +284,7 @@ void Room::Tick()
 	if (workUs > _workTimeMaxUs)
 		_workTimeMaxUs = workUs;
 	RecordTickCost(static_cast<int64>(workUs), part, partLock, ThreadCpuUs() - cpuStartUs, cpuStart, ::GetCurrentProcessorNumber(),
-		_viewSpawned + _viewDespawned - viewBefore);
+		_viewSpawned + _viewDespawned - viewBefore, ThreadCycles() - tickStartCycles, flushCycles, flushStats);
 
 	// 입장 대기 목록: work(틱 일)와 섞이지 않게 기록 다음에. 다음 틱 예약(now) 전에 해야 예약 시각이 이만큼 밀리지 않음
 	DrainPendingEnters();
@@ -322,6 +356,18 @@ void Room::LogStats(uint64 now)
 			any = true;
 		}
 		line << ") ms";
+
+		// 송신 세션별 + CPU를 쓴 비율 (사이클 / (걸린 시간 x 기준값)). 정수 %로 반올림
+		auto busyPercent = [this](uint64 cycles, int64 us)
+			{
+				if (us <= 0 || _cyclesPerUs <= 0)
+					return 0;
+				return static_cast<int32>(100.0 * static_cast<double>(cycles) / (static_cast<double>(us) * _cyclesPerUs) + 0.5);
+			};
+		line << ", flush sessions " << s.flush.sessions << " (closed " << s.flush.closed << ")"
+			<< ", one max " << (s.flush.maxUs / 1000.0) << "ms"
+			<< ", over 1ms " << s.flush.slowCount << " (sum " << (s.flush.slowSumUs / 1000.0) << "ms)"
+			<< ", cpu busy tick " << busyPercent(s.tickCycles, s.workUs) << "%, flush " << busyPercent(s.flushCycles, s.partUs[6]) << "%";
 	}
 	_tickStats = TickStats{};
 	_slowTick = SlowTick{};
@@ -1759,12 +1805,26 @@ void Room::SendTo(PlayerRef player, SendBufferRef sendBuffer)
 // 틱 맨 끝: 이번 틱에 PushSend한 세션마다 FlushSend 한 번 (쌓인 패킷을 WSASend 한 번으로)
 //   _pendingFlush가 GameSessionRef(shared_ptr)를 들고 있어서 틱 사이에 끊겨도 세션 객체는 여기까지 살아 있음
 //   끊긴 세션이면 FlushSend가 연결 여부를 보고 그냥 끝남
-void Room::FlushSends()
+//   세션마다 걸린 시간도 잼 (out): 몇 명만 크게 막혔는지(WSASend가 커널에서 기다림) vs 모두 고르게 느렸는지
+//   NowUs 두 번은 수십 ns -> 800명이어도 틱당 약 0.05ms
+void Room::FlushSends(FlushStats& out)
 {
 	for (GameSessionRef& session : _pendingFlush)
 	{
 		session->flushPending = false;
+		const int64 startUs = NowUs();
 		session->FlushSend();
+		const int64 us = NowUs() - startUs;
+
+		out.sessions++;
+		if (session->IsConnected() == false)
+			out.closed++;
+		out.maxUs = (std::max)(out.maxUs, us);
+		if (us >= 1'000)
+		{
+			out.slowCount++;
+			out.slowSumUs += us;
+		}
 	}
 	_pendingFlush.clear();	// 크기만 0으로 (잡아 둔 메모리는 다음 틱에 재사용)
 }
